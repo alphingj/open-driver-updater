@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Open Driver Updater</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="window">
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">◍</span><div><div class="brand-name">Driver Updater</div><div class="brand-sub">Open · Free forever</div></div></div>
+    <nav id="nav">
+      <button data-view="overview" class="active">Overview</button>
+      <button data-view="updates">Updates <span class="pill" id="pill-count">0</span></button>
+      <button data-view="devices">Devices</button>
+      <button data-view="backup">Backup</button>
+      <button data-view="schedule">Schedule</button>
+      <button data-view="excluded">Excluded</button>
+    </nav>
+    <div class="side-foot"><span id="arch" class="mono">…</span><span class="dot"></span><span>WHQL via MS Catalog</span></div>
+  </aside>
+  <main class="content">
+    <header class="topbar">
+      <div><h1 id="title">Overview</h1><p id="subtitle" class="muted">Keep every device on the latest driver.</p></div>
+      <div class="actions">
+        <button id="btn-scan" class="btn primary">Scan now</button>
+        <label class="switch"><input type="checkbox" id="live"><span></span>Live Catalog</label>
+      </div>
+    </header>
+    <section id="view-overview" class="view">
+      <div class="cards">
+        <div class="card hero"><div class="k" id="stat-devices">–</div><div class="l">Devices found</div></div>
+        <div class="card hero warn"><div class="k" id="stat-updates">–</div><div class="l">Need attention</div></div>
+        <div class="card hero ok"><div class="k" id="stat-backups">–</div><div class="l">Backups</div></div>
+      </div>
+      <div class="card"><h3>How it works</h3>
+        <ol class="steps"><li>Scan with Windows PnP + pnputil.</li><li>Match by Hardware ID to Microsoft Update Catalog / vendor pages.</li><li>Back up with pnputil export before installing. Free, no paywall.</li></ol>
+      </div>
+    </section>
+    <section id="view-updates" class="view hidden"><div id="updates" class="list"></div></section>
+    <section id="view-devices" class="view hidden"><div id="devices" class="list"></div></section>
+    <section id="view-backup" class="view hidden">
+      <div class="card"><h3>Driver backup</h3><p class="muted">Exports all third-party drivers with pnputil. Restore from Device Manager → Have Disk.</p>
+      <div class="row"><button id="btn-backup" class="btn primary">Back up now</button><span id="backup-msg" class="muted"></span></div></div>
+      <div id="backups" class="list"></div>
+    </section>
+    <section id="view-schedule" class="view hidden">
+      <div class="card"><h3>Automatic scans</h3><p class="muted">Registers a weekly Task Scheduler entry (Sunday 10:00).</p>
+      <div class="row"><button id="btn-sched-on" class="btn primary">Enable weekly</button><button id="btn-sched-off" class="btn">Disable</button><span id="sched-msg" class="muted"></span></div></div>
+    </section>
+    <section id="view-excluded" class="view hidden"><div id="excluded" class="list"></div></section>
+  </main>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

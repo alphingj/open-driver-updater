@@ -1,0 +1,2 @@
+# dev only (core runs on stdlib)
+pytest>=8
