@@ -37,23 +37,59 @@ def catalog_search_url(hwid: str) -> str:
     return MS_CATALOG_SEARCH + urllib.parse.quote(hwid)
 
 
+def query_candidates(hwid: str) -> list[str]:
+    """Full HWID first, then progressively shorter forms.
+
+    MS Catalog search is near-literal: 'USB\\VID_x&PID_y&REV_z' often scores
+    zero while 'USB\\VID_x&PID_y' hits. Same for PCI SUBSYS/REV suffixes.
+    """
+    hwid = (hwid or "").strip()
+    if not hwid:
+        return []
+    cands = [hwid]
+    if "&" in hwid:
+        head, rest = hwid.split("\\", 1) if "\\" in hwid else ("", hwid)
+        parts = rest.split("&")
+        for n in (2, 1):
+            if len(parts) > n:
+                short = head + "\\" + "&".join(parts[:n]) if head else "&".join(parts[:n])
+                if short not in cands:
+                    cands.append(short)
+    return cands
+
+
 def check_ms_catalog(hwid: str, timeout: int = 15) -> list[dict]:
     """Best-effort live lookup of Microsoft Update Catalog (HTML, may change)."""
-    url = catalog_search_url(hwid)
+    for q in query_candidates(hwid):
+        found = _check_ms_catalog_query(q, timeout)
+        if found:
+            return found
+    return []
+
+
+def _check_ms_catalog_query(query: str, timeout: int = 15) -> list[dict]:
+    url = MS_CATALOG_SEARCH + urllib.parse.quote(query)
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=timeout) as r:
             html = r.read().decode("utf-8", "ignore")
     except Exception:
         return []
-    # Catalog embeds results as: <a ... id="..._link" ...>Title</a>
-    titles = re.findall(r"goToDetails\(&quot;([0-9a-f\-]+)&quot;\)", html, re.I)
-    names = re.findall(r'class="contentTextItemRow".*?>([^<]{8,160})<', html, re.S)
+    # Catalog embeds results as: onclick='goToDetails("guid");' + <a id='guid_link'>Title</a>
+    guids = re.findall(r"goToDetails\(&quot;([0-9a-f\-]{36})&quot;\)", html, re.I)
+    if not guids:
+        guids = re.findall(r"goToDetails\(\"([0-9a-f\-]{36})\"\)", html, re.I)
+    titles: dict[str, str] = {}
+    for m in re.finditer(r"([0-9a-f-]{36})_link'[^>]*>\s*([^<]{3,200})", html, re.I):
+        titles[m.group(1).lower()] = re.sub(r"\s+", " ", m.group(2)).strip()
     out = []
-    for i, guid in enumerate(titles[:10]):
+    for guid in guids[:10]:
+        title = titles.get(guid.lower(), "")
+        if not title:
+            continue
         out.append({
             "id": guid,
-            "title": (names[i].strip() if i < len(names) else f"Update {guid}"),
+            "title": title,
             "url": f"https://www.catalog.update.microsoft.com/ScopedViewInline.aspx?updateid={guid}",
         })
     return out
