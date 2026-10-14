@@ -67,11 +67,21 @@ PowerShell/CIM when the binaries are absent.
 1. Native scan (problem devices, missing drivers). Disconnected ghosts
    (`IsPresent=false`) and virtual devices (`SWD\*`, `ROOT\*`, …) are shown but
    never offered as updates.
-2. Hardware-ID lookup against Microsoft Update Catalog with progressive fallback
+2. Live Catalog lookup per Hardware ID with progressive fallback
    (`REV`/`SUBSYS` suffixes stripped, buried `VEN&DEV` extracted), cached 7 days.
-3. One click downloads the Catalog CAB (SHA-256 verified), expands it, picks the
-   arch-compatible INF, and installs via `pnputil` (signatures enforced by Windows).
-   A failed pre-update backup stops the queue before anything is touched.
+   Hits pass a relevance gate (precise query, or title matches the device) and a
+   version check: strictly newer → **Ready**, plausible but unverifiable →
+   **Needs review** (manual install only, never auto-installed).
+3. One click (per driver, selected, or all) downloads the Catalog CAB (SHA-256
+   verified), expands it, picks the arch-compatible INF, and installs via
+   `pnputil` (signatures enforced by Windows). Display/GPU updates ask twice.
+4. Safety first: system restore point, then full driver backup — either failing
+   stops the queue before anything is touched. Every install records its
+   `oemNN.inf` name for one-click rollback. Reboot need is detected and shown.
+
+Also included: scheduled weekly scans, exclusion + skip-this-version lists,
+Windows Update driver source, game-component (VC++/DirectX) checks, offline
+folder/CAB install, HTML report export, and in-app update checks.
 
 ## Trust & privacy
 
@@ -91,8 +101,8 @@ cs\bin\OduApp.exe --selftest              # C# + native parity check
 
 ## Roadmap
 
-Windows Update Agent API, vendor-direct CAB downloads, SDIO packs, local INF
-folders, per-device rollback, reboot detection.
+Vendor-direct feeds (Intel/NVIDIA/AMD), SDIO offline packs, ARM64 native
+scanner, signed installer (needs a paid cert), auto-update with one click.
 
 ## Legal (clean-room)
 

@@ -638,6 +638,12 @@ namespace OduApp
             var live = new List<DriverUpdate>();
             if (selectedOnly)
             {
+                if (FindChecks(_content).Count == 0)
+                {
+                    MessageBox.Show("Open the Updates view to select drivers first.",
+                                    "Open Driver Updater");
+                    return;
+                }
                 foreach (DriverUpdate u in _updates)
                 {
                     if (u.UpdateId == "" || (u.Confidence ?? "high") != "high") continue;
