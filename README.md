@@ -1,69 +1,85 @@
 # Open Driver Updater — 100% free (MIT)
 
-Free clone of the paid Advanced Driver Updater workflow: **Scan → Review → Back up → Update**.
+Free driver updater for Windows: **Scan → Review → Back up → Update**.
 No paywall, no proprietary cloud DB. Drivers are open payloads fetched on demand from
 Microsoft Update Catalog (WHQL) with vendor pages as hints.
 
+## Architecture (4 languages, each where it wins)
+
+| Layer | Language | Path | Why |
+|---|---|---|---|
+| HWID utils (normalize, VEN/DEV, INF arch tags) | **C** | `native/odu_hw/` | dependency-free, shared semantics |
+| Instant device scan (SetupAPI, 0 mismatches vs PnP) | **C++** | `native/odu_scan/` | 0.2s for 169 devices, no PowerShell |
+| Desktop app (WPF, Apple-style UI) | **C#** | `cs/OduApp/` | native Windows UI, x86/x64/ARM64 |
+| Resolver service, CLI, tests, automation | **Python** | `src/odu/` | web UI + API + CI |
+
+C# and Python share the same native scanner (`native/bin/*/odu_scan.exe`).
+
 ## Compatibility
 
-`x86 (32-bit) + x64 + ARM64` on Windows 10/11 (7/8.1 best-effort on x86/x64).
-Core is stdlib-only Python, so the same code runs on every arch. Driver matching
-always uses the **OS** architecture (`native_arch`, WOW64-safe), and INF arch tags
-(`NTX86`/`NTAMD64`/`NTARM64`) are matched exactly — no wrong-arch installs.
+`x86 + x64 + ARM64` on Windows 10/11 (7/8.1 best-effort x86/x64).
+Driver matching always uses the **OS** architecture (WOW64-safe), INF tags
+(`NTX86`/`NTAMD64`/`NTARM64`) matched exactly — no wrong-arch installs.
 
-## Run (no install)
+## Build
 
-```powershell
-$env:PYTHONPATH="src"; python -m odu.cli scan
-$env:PYTHONPATH="src"; python -m odu.cli serve --port 8901   # Apple-style web UI
-$env:PYTHONPATH="src"; python -m odu.cli backup              # pnputil export (elevated)
-$env:PYTHONPATH="src"; python -m odu.cli update-all          # backup + install all (elevated)
+```bat
+native\build.bat   :: MSVC 2022: odu_hw.lib + odu_scan.exe (x64+x86) + C selftest
+cs\build.bat       :: in-box Framework csc: OduApp.exe (no SDK/NuGet needed)
 ```
 
-Open http://127.0.0.1:8901/ — press **Scan now**, tick **Live Catalog**, then **Update all**.
-Updates install sequentially; a failed pre-update backup stops the queue before
-anything is touched. A restart may be required afterwards.
+Requires VS2022 with MSVC + Windows SDK (both already used here).
+
+## Run
+
+```powershell
+# Native desktop app (recommended)
+cs\bin\OduApp.exe
+
+# Headless self-test (C# + native scan, no GUI)
+cs\bin\OduApp.exe --selftest
+
+# Python service / CLI
+$env:PYTHONPATH="src"; python -m odu.cli scan
+$env:PYTHONPATH="src"; python -m odu.cli serve --port 8901   # web UI
+$env:PYTHONPATH="src"; python -m odu.cli backup              # elevated
+$env:PYTHONPATH="src"; python -m odu.cli update-all          # elevated
+```
+
+The Python scanner prefers `odu_scan.exe` automatically, falling back to
+PowerShell/CIM when the binaries are absent.
 
 ## How updates resolve
 
-1. Local PnP scan (problem devices, missing drivers). Disconnected ghosts
-   (`problem 45`) and virtual devices (`SWD\*`, `ROOT\*`, …) are shown but never
-   offered as updates.
+1. Native scan (problem devices, missing drivers). Disconnected ghosts
+   (`IsPresent=false`) and virtual devices (`SWD\*`, `ROOT\*`, …) are shown but
+   never offered as updates.
 2. Hardware-ID lookup against Microsoft Update Catalog with progressive fallback
-   (`VID&PID&REV` → `VID&PID`), cached 7 days, 4-way parallel.
+   (`REV`/`SUBSYS` suffixes stripped, buried `VEN&DEV` extracted), cached 7 days.
 3. One click downloads the Catalog CAB (SHA-256 verified), expands it, picks the
    arch-compatible INF, and installs via `pnputil` (signatures enforced by Windows).
+   A failed pre-update backup stops the queue before anything is touched.
 
 ## Trust & privacy
 
-- Web UI binds `127.0.0.1` only; any local process can call it, installs additionally
-  need elevation. No accounts, no telemetry.
-- HWIDs are sent to Microsoft Update Catalog (required to find drivers), nothing else.
-- Binaries are never bundled; drivers download at install time from Microsoft.
-
-## Build per-arch exe
-
-```powershell
-pip install pyinstaller
-pyinstaller --onefile --name odu-x64 -p src -m odu.cli
-```
-
-Build natively on each arch (x86 machine → `odu-x86.exe`, ARM64 → `odu-arm64.exe`).
-Do not cross-build.
+- Web UI binds `127.0.0.1` only; installs need elevation. No accounts, no telemetry.
+- HWIDs go to Microsoft Update Catalog (required to find drivers), nowhere else.
+- Drivers download at install time from Microsoft; nothing is bundled or re-hosted.
 
 ## Tests
 
 ```powershell
-python -m unittest discover -s tests -v   # stdlib only, no pytest needed
+python -m unittest discover -s tests -v   # stdlib only
+native\build.bat                          # includes C selftest (HW SELFTEST OK)
+cs\bin\OduApp.exe --selftest              # C# + native parity check
 ```
 
-`scripts/` holds repeatable verifiers (`verify_*.py`, `test_*.py`); `scripts/dev/`
-holds one-off Catalog probes.
+`scripts/` holds repeatable verifiers; `scripts/dev/` holds one-off probes.
 
 ## Roadmap
 
 Windows Update Agent API, vendor-direct CAB downloads, SDIO packs, local INF
-folders, per-device rollback (beyond full export), reboot detection.
+folders, per-device rollback, reboot detection.
 
 ## Legal (clean-room)
 

@@ -29,13 +29,20 @@ VENDOR_HINTS: list[tuple[str, str, str]] = [
     ("VEN_8086", "Intel", "https://www.intel.com/content/www/us/en/download-center.html"),
     ("VEN_10DE", "NVIDIA", "https://www.nvidia.com/drivers"),
     ("VEN_1002", "AMD", "https://www.amd.com/en/support/downloads.html"),
+    ("VEN_1022", "AMD", "https://www.amd.com/en/support/downloads.html"),
     ("VEN_10EC", "Realtek", "https://www.realtek.com/Download/Index"),
     ("VEN_14E4", "Broadcom", "https://www.broadcom.com/support/download-search"),
+    ("VEN_0E8D", "MediaTek", "https://www.mediatek.com/products"),
+    ("VEN_13D3", "AzureWave", "https://www.azurewave.com/support.aspx"),
+    ("VEN_17AA", "Lenovo", "https://pcsupport.lenovo.com/drivers"),
+    ("VEN_1043", "ASUS", "https://www.asus.com/support/download-center/"),
+    ("VEN_1028", "Dell", "https://www.dell.com/support/home/drivers"),
+    ("VEN_103C", "HP", "https://support.hp.com/drivers"),
 ]
 
 
 def _ven(hwid: str) -> str:
-    m = re.search(r"VEN_([0-9A-Fa-f]{4})", hwid or "")
+    m = re.search(r"(?:VEN|VID)_([0-9A-Fa-f]{4})", hwid or "")
     return ("VEN_" + m.group(1).upper()) if m else ""
 
 
@@ -48,6 +55,20 @@ def vendor_hint(hwid: str) -> dict:
 
 def catalog_search_url(hwid: str) -> str:
     return MS_CATALOG_SEARCH + urllib.parse.quote(hwid)
+
+
+def search_url_for(hwid: str) -> str:
+    """Static Catalog link most likely to show results (no HTTP cost).
+
+    Full HWIDs with REV/SUBSYS suffixes score zero; the buried
+    VEN_xxxx&DEV_xxxx (or VID/PID) pair is what the Catalog indexes.
+    """
+    cands = query_candidates(hwid)
+    for q in cands:
+        if re.fullmatch(r"(?:VEN|VID)_[0-9A-Fa-f]{4}&(?:DEV|PID)_[0-9A-Fa-f]{4}",
+                        q, re.I):
+            return catalog_search_url(q)
+    return catalog_search_url(cands[-1] if cands else hwid)
 
 
 def _fetch(url: str, timeout: int, data: bytes | None = None) -> str:
@@ -69,6 +90,12 @@ def query_candidates(hwid: str) -> list[str]:
     if not hwid:
         return []
     cands = [hwid]
+    # PCI/ACPI style: the VEN_xxxx&DEV_xxxx pair buried mid-string is what the
+    # Catalog indexes (e.g. ACP\...\VEN_1022&DEV_15E2\... -> VEN_1022&DEV_15E2).
+    m = re.search(r"((?:VEN|VID)_[0-9A-Fa-f]{4}&(?:DEV|PID)_[0-9A-Fa-f]{4})",
+                  hwid, re.I)
+    if m and m.group(1) not in cands:
+        cands.append(m.group(1))
     if "&" in hwid:
         head, rest = hwid.split("\\", 1) if "\\" in hwid else ("", hwid)
         parts = rest.split("&")
@@ -80,30 +107,49 @@ def query_candidates(hwid: str) -> list[str]:
     return cands
 
 
-def check_ms_catalog(hwid: str, timeout: int = 15) -> list[dict]:
-    """Best-effort live lookup of Microsoft Update Catalog (HTML, may change)."""
+def _cached_query(query: str, timeout: int = 15) -> list[dict]:
+    """Single Catalog query with 7-day result cache (keyed by query string)."""
     try:
-        cached = store_mod.cache_get(hwid)
+        cached = store_mod.cache_get("q:" + query)
     except Exception:
         cached = None
     if cached:
         try:
-            return json.loads(cached)
+            parsed = json.loads(cached)
+            if isinstance(parsed, list):
+                return parsed
         except Exception:
             pass
-    found: list[dict] = []
-    for q in query_candidates(hwid):
-        try:
-            found = _check_ms_catalog_query(q, timeout)
-        except Exception:
-            found = []
-        if found:
-            break
     try:
-        store_mod.cache_put(hwid, json.dumps(found))
+        found = _check_ms_catalog_query(query, timeout)
+    except Exception:
+        found = []
+    try:
+        store_mod.cache_put("q:" + query, json.dumps(found))
     except Exception:
         pass
     return found
+
+
+def check_ms_catalog(hwid: str, timeout: int = 15) -> list[dict]:
+    """Best-effort live lookup of Microsoft Update Catalog (HTML, may change)."""
+    for q in query_candidates(hwid):
+        if _cached_query(q, timeout):
+            return _cached_query(q, timeout)
+    return []
+
+
+def best_search_url(hwid: str, timeout: int = 15) -> tuple[str, int]:
+    """Catalog search URL most likely to show results + its hit count.
+
+    Probes candidates (cache-backed) and returns the first query with hits;
+    falls back to the full-HWID search when nothing matches.
+    """
+    for q in query_candidates(hwid):
+        hits = _cached_query(q, timeout)
+        if hits:
+            return catalog_search_url(q), len(hits)
+    return catalog_search_url(hwid), 0
 
 
 def _check_ms_catalog_query(query: str, timeout: int = 15) -> list[dict]:
@@ -213,7 +259,7 @@ def resolve_updates(devices: list[Device], arch: str | None = None,
             hwid=hwid, device_name=dev.friendly_name or dev.instance_id,
             instance_id=dev.instance_id, installed_version=dev.driver_version,
             available_version="Check Catalog" if not dev.driver_version else "Update available",
-            source="ms-catalog", download_url=catalog_search_url(hwid),
+            source="ms-catalog", download_url=search_url_for(hwid),
             arch=arch,
             title=f"{dev.friendly_name or dev.dev_class} — search Microsoft Update Catalog"
             + (f" ({hint['vendor']})" if hint["vendor"] else ""),

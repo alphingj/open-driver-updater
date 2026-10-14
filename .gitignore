@@ -2,3 +2,9 @@ __pycache__/
 *.pyc
 .odu.sqlite3
 scripts/test_e2e.db
+native/bin/
+cs/bin/
+
+*.obj
+*.lib
+*.exe

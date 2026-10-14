@@ -51,6 +51,56 @@ def _classify(problem: int, status: str) -> str:
     return "OK"
 
 
+def scan_native(exe: str | None = None, timeout: int = 60) -> list[Device]:
+    """Scan via the C++ odu_scan.exe (instant, no PowerShell). Empty on failure."""
+    import os
+    if exe is None:
+        exe = find_scanner()
+    if not exe:
+        return []
+    try:
+        out = subprocess.run([exe], capture_output=True, timeout=timeout)
+        if out.returncode != 0 or not out.stdout:
+            return []
+        data = json.loads(out.stdout.decode("utf-8", "ignore"))
+    except Exception:
+        return []
+    devs: list[Device] = []
+    for d in data if isinstance(data, list) else []:
+        if not isinstance(d, dict) or not d.get("instance_id"):
+            continue
+        try:
+            problem = int(d.get("problem_code") or 0)
+        except (TypeError, ValueError):
+            problem = 0
+        devs.append(Device(
+            instance_id=str(d.get("instance_id") or ""),
+            friendly_name=str(d.get("friendly_name") or ""),
+            dev_class=str(d.get("dev_class") or ""),
+            manufacturer=str(d.get("manufacturer") or ""),
+            hwid=[str(v) for v in (d.get("hwid") or [])][:8],
+            status=str(d.get("status") or "OK"),
+            problem_code=problem,
+            driver_version=str(d.get("driver_version") or ""),
+            driver_date=str(d.get("driver_date") or ""),
+            driver_provider=str(d.get("driver_provider") or ""),
+        ))
+    return devs
+
+
+def find_scanner() -> str:
+    """Locate native/bin/{x64,x86}/odu_scan.exe from a source checkout."""
+    import os
+    here = os.path.abspath(__file__)
+    for _ in range(5):
+        here = os.path.dirname(here)
+        for sub in ("x64", "x86"):
+            cand = os.path.join(here, "native", "bin", sub, "odu_scan.exe")
+            if os.path.isfile(cand):
+                return cand
+    return ""
+
+
 def scan_powershell() -> list[Device]:
     raw = _run_ps()
     if not raw.strip():
@@ -100,6 +150,12 @@ def scan_powershell() -> list[Device]:
 def scan(mock: list[Device] | None = None) -> list[Device]:
     if mock is not None:
         return mock
+    try:
+        devs = scan_native()
+        if devs:
+            return devs
+    except Exception:
+        pass
     try:
         return scan_powershell()
     except Exception:
