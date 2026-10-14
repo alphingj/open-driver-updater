@@ -1,6 +1,6 @@
 ; Open Driver Updater — Inno Setup 7 script. Produces OpenDriverUpdater-Setup.exe.
 #define MyAppName "Open Driver Updater"
-#define MyAppVersion "0.2.0"
+#define MyAppVersion "0.3.0"
 #define MyAppPublisher "open-driver-updater contributors"
 #define MyAppURL "https://github.com/alphingj/open-driver-updater"
 #define MyAppExeName "OduApp.exe"

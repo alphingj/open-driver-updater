@@ -135,11 +135,46 @@ def _cached_query(query: str, timeout: int = 15) -> list[dict]:
 
 def check_ms_catalog(hwid: str, timeout: int = 15) -> list[dict]:
     """Best-effort live lookup of Microsoft Update Catalog (HTML, may change)."""
+    hits, _ = check_ms_catalog_q(hwid, timeout)
+    return hits
+
+
+def check_ms_catalog_q(hwid: str, timeout: int = 15) -> tuple[list[dict], str]:
+    """Like check_ms_catalog but also returns the winning query string."""
     for q in query_candidates(hwid):
         found = _cached_query(q, timeout)
         if found:
-            return found
-    return []
+            return found, q
+    return [], ""
+
+
+def _specific_query(query: str) -> bool:
+    """A query precise enough to trust its top hit: full HWID, or a
+    VEN/VID+DEV/PID hex pair. Single-segment stubs (ACPI\\VEN_PNP) match
+    unrelated drivers on Microsoft's side and must not auto-flag."""
+    if re.search(r"(?:VEN|VID)_[0-9A-Fa-f]{4}&(?:DEV|PID)_[0-9A-Fa-f]{4}", query, re.I):
+        return True
+    return query.count("&") >= 2
+
+
+_STOPWORDS = {"microsoft", "standard", "devices", "device", "system", "generic",
+            "compatible", "software", "component", "control", "method"}
+
+
+def _title_tokens(text: str) -> set[str]:
+    # 3+ chars: vendor codes like AMD/DTS/USB are the most valuable tokens.
+    return {t for t in re.findall(r"[a-z0-9]+", (text or "").lower())
+            if len(t) >= 3 and t not in _STOPWORDS}
+
+
+def title_matches_device(title: str, dev: Device) -> bool:
+    """Does the Catalog title plausibly target this device? Guards against
+    generic-query hits (e.g. a keyboard filter offered for a DMA controller)."""
+    tt = _title_tokens(title)
+    for src in (dev.manufacturer, dev.dev_class, dev.friendly_name):
+        if _title_tokens(src) & tt:
+            return True
+    return False
 
 
 def best_search_url(hwid: str, timeout: int = 15) -> tuple[str, int]:
@@ -237,6 +272,50 @@ def _cut(s: str, n: int) -> str:
     return s[:n]
 
 
+def _ver_tokens(title: str) -> list[tuple[int, ...]]:
+    """All version-like tokens in a Catalog title, longest match wins later."""
+    toks = []
+    for m in re.finditer(r"\d+(?:\.\d+){1,3}", title or ""):
+        try:
+            toks.append(tuple(int(x) for x in m.group(0).split(".")))
+        except ValueError:
+            pass
+    return toks
+
+
+def catalog_version(title: str) -> tuple[int, ...]:
+    """Best-guess driver version from a Catalog title (last token wins).
+
+    Dates use slashes/colons ("3/30/2016 12:00:00 AM") so dotted tokens are
+    versions in practice ("Net - 1.0.0.9", "Update (7.2610.1.1)").
+    """
+    toks = _ver_tokens(title)
+    return toks[-1] if toks else ()
+
+
+def _parse_version(s: str) -> tuple[int, ...]:
+    try:
+        return tuple(int(x) for x in re.findall(r"\d+", s or "")[:4])
+    except ValueError:
+        return ()
+
+
+def is_newer(available: tuple[int, ...], installed: str) -> bool:
+    """True when the catalog version is strictly newer than installed.
+
+    Different vendor schemes can false-negative (never false-claim on
+    unparseable input); the title is always shown for user review.
+    """
+    if not available:
+        return False
+    have = _parse_version(installed)
+    if not have:
+        return True
+    a = available + (0,) * (4 - len(available))
+    b = have[:4] + (0,) * (4 - len(have[:4]))
+    return a > b
+
+
 def resolve_updates(devices: list[Device], arch: str | None = None,
                     live_catalog: bool = False) -> list[DriverUpdate]:
     arch = native_arch() if arch is None else arch
@@ -244,32 +323,43 @@ def resolve_updates(devices: list[Device], arch: str | None = None,
     cands = [d for d in devices
              if d.hwid and not _is_skipped(d.hwid[0])
              and d.hwid[0] not in excluded and d.instance_id not in excluded
-             and _needs(d)]
-    live: dict[str, list[dict]] = {}
+             and (live_catalog or _needs(d))]
+    live: dict[str, tuple[list[dict], str]] = {}
     if live_catalog and cands:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-            futs = {pool.submit(check_ms_catalog, d.hwid[0]): d.instance_id for d in cands}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            futs = {pool.submit(check_ms_catalog_q, d.hwid[0]): d.instance_id for d in cands}
             for fut in concurrent.futures.as_completed(futs):
                 try:
-                    live[futs[fut]] = fut.result() or []
+                    live[futs[fut]] = fut.result() or ([], "")
                 except Exception:
-                    live[futs[fut]] = []
+                    live[futs[fut]] = ([], "")
     updates: list[DriverUpdate] = []
     for dev in cands:
         hwid = dev.hwid[0]
         hint = vendor_hint(hwid)
-        found = live.get(dev.instance_id, []) if live_catalog else []
+        found, query = live.get(dev.instance_id, ([], "")) if live_catalog else ([], "")
         if found:
-            f = found[0]
-            updates.append(DriverUpdate(
-                hwid=hwid, device_name=dev.friendly_name or dev.instance_id,
-                instance_id=dev.instance_id, installed_version=dev.driver_version,
-                available_version=_cut(f["title"], 64), source="ms-catalog",
-                download_url=f["url"], arch=arch, title=f["title"],
-                update_id=f["id"], size=int(f.get("size") or 0),
-                vendor=hint["vendor"], vendor_url=hint["url"]))
+            if not _specific_query(query) and not title_matches_device(found[0]["title"], dev):
+                pass  # generic-query hit for unrelated hardware: ignore
+            else:
+                f = found[0]
+                aver = catalog_version(f["title"])
+                if dev.driver_version and not is_newer(aver, dev.driver_version):
+                    continue  # installed is current (or schemes incomparable)
+                updates.append(DriverUpdate(
+                    hwid=hwid, device_name=dev.friendly_name or dev.instance_id,
+                    instance_id=dev.instance_id, installed_version=dev.driver_version,
+                    available_version=_cut(f["title"], 64), source="ms-catalog",
+                    download_url=f["url"], arch=arch, title=f["title"],
+                    update_id=f["id"], size=int(f.get("size") or 0),
+                    vendor=hint["vendor"], vendor_url=hint["url"]))
+                continue
+        if not live_catalog and not _needs(dev):
             continue
-        updates.append(DriverUpdate(
+        # No usable hit: manual search link only for broken/missing drivers
+        # (healthy devices with no Catalog data are not listed in live mode).
+        if _needs(dev):
+            updates.append(DriverUpdate(
             hwid=hwid, device_name=dev.friendly_name or dev.instance_id,
             instance_id=dev.instance_id, installed_version=dev.driver_version,
             available_version="Check Catalog" if not dev.driver_version else "Update available",

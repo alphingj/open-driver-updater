@@ -170,27 +170,78 @@ namespace OduApp
             return SearchBase + Uri.EscapeDataString(best ?? "");
         }
 
+        public class QueryResult
+        {
+            public string Query;
+            public List<CatalogHit> Hits;
+        }
+
         public static List<CatalogHit> Lookup(string hwid)
         {
-            // 4-way parallel like the Python resolver; order preserved so the
-            // first candidate with hits wins.
+            string q;
+            return LookupQ(hwid, out q);
+        }
+
+        public static List<CatalogHit> LookupQ(string hwid, out string query)
+        {
+            // Parallel across candidates; order preserved so the first
+            // candidate with hits wins (most specific query first).
+            query = "";
             List<string> qs = QueryCandidates(hwid);
-            Task<List<CatalogHit>>[] tasks = new Task<List<CatalogHit>>[qs.Count];
+            Task<QueryResult>[] tasks = new Task<QueryResult>[qs.Count];
             for (int i = 0; i < qs.Count; i++)
             {
                 string q = qs[i];
-                tasks[i] = Task.Factory.StartNew(
-                    delegate { return QueryOne(q); }, TaskCreationOptions.LongRunning);
+                tasks[i] = Task.Factory.StartNew(delegate
+                {
+                    var r = new QueryResult();
+                    r.Query = q;
+                    r.Hits = QueryOne(q);
+                    return r;
+                }, TaskCreationOptions.LongRunning);
             }
             try { Task.WaitAll(tasks, 4 * 60 * 1000); } catch { }
-            foreach (Task<List<CatalogHit>> t in tasks)
+            foreach (Task<QueryResult> t in tasks)
             {
-                List<CatalogHit> r;
-                try { r = t.IsCompleted ? t.Result : new List<CatalogHit>(); }
-                catch { r = new List<CatalogHit>(); }
-                if (r.Count > 0) return r;
+                QueryResult r = null;
+                try { r = t.IsCompleted ? t.Result : null; }
+                catch { }
+                if (r != null && r.Hits.Count > 0) { query = r.Query; return r.Hits; }
             }
             return new List<CatalogHit>();
+        }
+
+        public static bool SpecificQuery(string query)
+        {
+            if (Regex.IsMatch(query ?? "",
+                    @"(?:VEN|VID)_[0-9A-Fa-f]{4}&(?:DEV|PID)_[0-9A-Fa-f]{4}"))
+                return true;
+            int n = 0;
+            foreach (char c in (query ?? "")) if (c == '&') n++;
+            return n >= 2;
+        }
+
+        private static readonly HashSet<string> Stopwords = new HashSet<string>(
+            new string[] { "microsoft", "standard", "devices", "device", "system",
+                "generic", "compatible", "software", "component", "control", "method" });
+
+        private static HashSet<string> TitleTokens(string text)
+        {
+            var out_ = new HashSet<string>();
+            foreach (Match m in Regex.Matches((text ?? "").ToLowerInvariant(), "[a-z0-9]+"))
+                if (m.Value.Length >= 3 && !Stopwords.Contains(m.Value)) out_.Add(m.Value);
+            return out_;
+        }
+
+        public static bool TitleMatchesDevice(string title, Device d)
+        {
+            HashSet<string> tt = TitleTokens(title);
+            foreach (string src in new string[] { d.Manufacturer, d.DevClass, d.FriendlyName })
+            {
+                foreach (string t in TitleTokens(src))
+                    if (tt.Contains(t)) return true;
+            }
+            return false;
         }
 
         public static List<CatalogHit> ParseSearch(string html)
@@ -313,20 +364,87 @@ namespace OduApp
             return s.Substring(0, n);
         }
 
+        // Best-guess driver version from a Catalog title (last dotted token).
+        // Dates use slashes/colons so dotted tokens are versions in practice.
+        public static int[] CatalogVersion(string title)
+        {
+            int[] best = new int[0];
+            foreach (Match m in Regex.Matches(title ?? "", "\\d+(?:\\.\\d+){1,3}"))
+            {
+                string[] parts = m.Value.Split('.');
+                var v = new int[parts.Length];
+                bool ok = true;
+                for (int i = 0; i < parts.Length; i++)
+                    if (!int.TryParse(parts[i], out v[i])) { ok = false; break; }
+                if (ok) best = v;
+            }
+            return best;
+        }
+
+        public static bool IsNewer(int[] available, string installed)
+        {
+            if (available == null || available.Length == 0) return false;
+            MatchCollection nums = Regex.Matches(installed ?? "", "\\d+");
+            if (nums.Count == 0) return true;
+            for (int i = 0; i < 4; i++)
+            {
+                int a = i < available.Length ? available[i] : 0;
+                int b = 0;
+                if (i < nums.Count) int.TryParse(nums[i].Value, out b);
+                if (a != b) return a > b;
+            }
+            return false;
+        }
+
         public static List<DriverUpdate> Resolve(List<Device> devices, List<string> excluded, bool live)
         {
-            var out_ = new List<DriverUpdate>();
             string arch = ArchUtil.NativeArch();
             var excl = new HashSet<string>(excluded ?? new List<string>());
+            var cands = new List<Device>();
             foreach (Device d in devices)
             {
+                string h = d.PrimaryHwId();
+                if (h == "" || IsSkipped(h)) continue;
+                if (excl.Contains(h) || excl.Contains(d.InstanceId)) continue;
+                if (!live)
+                {
+                    bool needs = d.ProblemCode != 0 || d.Status == "ERROR" ||
+                                 string.IsNullOrEmpty(d.DriverVersion);
+                    if (d.Status == "DISCONNECTED") needs = false;
+                    if (!needs) continue;
+                }
+                cands.Add(d);
+            }
+            // Parallel lookups; order preserved so results stay stable.
+            // Each slot keeps the winning query for the relevance check.
+            List<CatalogHit>[] hits = new List<CatalogHit>[cands.Count];
+            string[] queries = new string[cands.Count];
+            if (live && cands.Count > 0)
+            {
+                Task[] tasks = new Task[cands.Count];
+                for (int i = 0; i < cands.Count; i++)
+                {
+                    int idx = i;
+                    string hw = cands[idx].PrimaryHwId();
+                    tasks[idx] = Task.Factory.StartNew(delegate
+                    {
+                        List<CatalogHit> r = new List<CatalogHit>();
+                        string q = "";
+                        try { r = LookupQ(hw, out q); }
+                        catch { }
+                        hits[idx] = r;
+                        queries[idx] = q;
+                    }, TaskCreationOptions.LongRunning);
+                }
+                try { Task.WaitAll(tasks, 30 * 60 * 1000); } catch { }
+                for (int i = 0; i < hits.Length; i++)
+                    if (hits[i] == null) hits[i] = new List<CatalogHit>();
+            }
+            var out_ = new List<DriverUpdate>();
+            for (int i = 0; i < cands.Count; i++)
+            {
+                Device d = cands[i];
                 string hwid = d.PrimaryHwId();
-                if (hwid == "" || IsSkipped(hwid)) continue;
-                if (excl.Contains(hwid) || excl.Contains(d.InstanceId)) continue;
-                bool needs = d.ProblemCode != 0 || d.Status == "ERROR" ||
-                             string.IsNullOrEmpty(d.DriverVersion);
-                if (d.Status == "DISCONNECTED") needs = false;
-                if (!needs) continue;
                 string vendor, vurl;
                 VendorHint(hwid, out vendor, out vurl);
                 var u = new DriverUpdate();
@@ -340,17 +458,30 @@ namespace OduApp
                 u.VendorUrl = vurl;
                 if (live)
                 {
-                    List<CatalogHit> hits = Lookup(hwid);
-                    if (hits.Count > 0)
+                    List<CatalogHit> found = (hits != null && i < hits.Length && hits[i] != null)
+                        ? hits[i] : new List<CatalogHit>();
+                    if (found.Count > 0)
                     {
-                        u.AvailableVersion = Cut(hits[0].Title, 64);
-                        u.DownloadUrl = hits[0].Url;
-                        u.Title = hits[0].Title;
-                        u.UpdateId = hits[0].Id;
-                        u.Size = hits[0].Size;
+                        string wq = (queries != null && i < queries.Length) ? queries[i] : "";
+                        if (!SpecificQuery(wq) && !TitleMatchesDevice(found[0].Title, d))
+                            continue; // generic-query hit for unrelated hardware
+                        int[] aver = CatalogVersion(found[0].Title);
+                        if (d.DriverVersion != "" && !IsNewer(aver, d.DriverVersion))
+                            continue; // installed is current (or schemes incomparable)
+                        u.AvailableVersion = Cut(found[0].Title, 64);
+                        u.DownloadUrl = found[0].Url;
+                        u.Title = found[0].Title;
+                        u.UpdateId = found[0].Id;
+                        u.Size = found[0].Size;
                         out_.Add(u);
                         continue;
                     }
+                }
+                if (live)
+                {
+                    bool needs = d.ProblemCode != 0 || d.Status == "ERROR" ||
+                                 string.IsNullOrEmpty(d.DriverVersion);
+                    if (!needs) continue; // healthy + no catalog hit: nothing to show
                 }
                 u.AvailableVersion = string.IsNullOrEmpty(d.DriverVersion)
                     ? "Check Catalog" : "Update available";

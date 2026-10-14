@@ -15,6 +15,14 @@ namespace OduApp
             if (!cond) { Console.WriteLine("FAIL " + name); _fails++; }
         }
 
+        private static string Join(int[] v)
+        {
+            string s = "";
+            for (int i = 0; i < v.Length; i++)
+                s += (i > 0 ? "." : "") + v[i];
+            return s;
+        }
+
         public static int Run()
         {
             // ArchUtil (mirrors C odu_canonical_arch + INF tags)
@@ -43,6 +51,30 @@ namespace OduApp
             // Surrogate-safe cut
             Check(Catalog.Cut("abcdef", 64) == "abcdef", "cut-short");
             Check(Catalog.Cut("abc\U0001F600def", 4) == "abc", "cut-surrogate");
+
+            // Relevance gate (mirrors Python _specific_query/title_matches_device)
+            Check(!Catalog.SpecificQuery("ACPI\\VEN_PNP"), "rel-generic");
+            Check(Catalog.SpecificQuery("VEN_1022&DEV_15E2"), "rel-pair");
+            Check(Catalog.SpecificQuery("PCI\\VEN_1022&DEV_15E2&SUBSYS_X"), "rel-full");
+            var dma = new Device();
+            dma.FriendlyName = "Direct memory access controller";
+            dma.DevClass = "System";
+            dma.Manufacturer = "(Standard system devices)";
+            Check(!Catalog.TitleMatchesDevice("Keyboard Filter Driver - Keyboard - 22.5.23.1", dma), "rel-reject");
+            var rtk = new Device();
+            rtk.FriendlyName = "Realtek Audio Effects Component";
+            rtk.DevClass = "AudioProcessingObject";
+            rtk.Manufacturer = "Realtek";
+            Check(Catalog.TitleMatchesDevice("Realtek AudioProcessingObject Driver Update (13.6709.2609.932)", rtk), "rel-accept");
+
+            // Version comparison (mirrors Python catalog_version/is_newer)
+            Check(Join(Catalog.CatalogVersion("Naxiang - Net - 1.0.0.9")) == "1.0.0.9", "ver-trailing");
+            Check(Join(Catalog.CatalogVersion("AMD System Driver Update (7.2610.1.1)")) == "7.2610.1.1", "ver-paren");
+            Check(Join(Catalog.CatalogVersion("Android - Net - 3/30/2016 12:00:00 AM - 1.0.0.1")) == "1.0.0.1", "ver-date");
+            Check(Catalog.CatalogVersion("No version here").Length == 0, "ver-none");
+            Check(Catalog.IsNewer(new int[] { 1, 0, 0, 9 }, "1.0.0.1"), "newer-yes");
+            Check(!Catalog.IsNewer(new int[] { 1, 0, 0, 9 }, "1.0.0.9"), "newer-same");
+            Check(!Catalog.IsNewer(new int[] { 7, 2610, 1, 1 }, "32.0.21030.31"), "newer-scheme");
 
             // ParseSearch golden HTML
             string golden = "<a id='aaaabbbb-cccc-dddd-eeee-ffffffffffff_link' href= \"javascript:void(0);\" " +

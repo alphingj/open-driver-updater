@@ -163,6 +163,38 @@ class SearchUrlTest(unittest.TestCase):
         # _cut is a safeguard that must preserve astral chars intact.
         self.assertEqual(_cut("abc\U0001F600def", 4), "abc\U0001F600")
 
+    def test_relevance(self):
+        from odu.catalog import _specific_query, title_matches_device
+        from odu.models import Device
+        dma = Device(instance_id="D", friendly_name="Direct memory access controller",
+                     dev_class="System", manufacturer="(Standard system devices)")
+        self.assertFalse(_specific_query("ACPI\\VEN_PNP"))
+        self.assertTrue(_specific_query("VEN_1022&DEV_15E2"))
+        self.assertTrue(_specific_query("PCI\\VEN_1022&DEV_15E2&SUBSYS_X"))
+        self.assertFalse(title_matches_device("Keyboard Filter Driver - Keyboard - 22.5.23.1", dma))
+        realtek = Device(instance_id="R", friendly_name="Realtek Audio Effects Component",
+                          dev_class="AudioProcessingObject", manufacturer="Realtek")
+        self.assertTrue(title_matches_device(
+            "Realtek AudioProcessingObject Driver Update (13.6709.2609.932)", realtek))
+        dts = Device(instance_id="T", friendly_name="DTS APO4x Service Component",
+                     dev_class="SoftwareComponent", manufacturer="DTS")
+        self.assertTrue(title_matches_device("DTS SoftwareComponent Driver Update (1.16.4.0)", dts))
+
+    def test_version_compare(self):
+        from odu.catalog import catalog_version, is_newer
+        self.assertEqual(catalog_version("Naxiang - Net - 1.0.0.9"), (1, 0, 0, 9))
+        self.assertEqual(catalog_version("AMD System Driver Update (7.2610.1.1)"),
+                         (7, 2610, 1, 1))
+        # dates must not parse as versions
+        self.assertEqual(catalog_version("Android - Net - 3/30/2016 12:00:00 AM - 1.0.0.1"),
+                         (1, 0, 0, 1))
+        self.assertEqual(catalog_version("No version here"), ())
+        self.assertTrue(is_newer((1, 0, 0, 9), "1.0.0.1"))
+        self.assertFalse(is_newer((1, 0, 0, 9), "1.0.0.9"))
+        self.assertFalse(is_newer((7, 2610, 1, 1), "32.0.21030.31"))  # scheme differs: quiet
+        self.assertTrue(is_newer((10, 0, 1, 41), ""))
+        self.assertFalse(is_newer((), "1.0"))
+
     def test_no_negative_cache(self):
         from odu import catalog
         with tempfile.TemporaryDirectory() as d:
