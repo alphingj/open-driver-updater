@@ -38,7 +38,11 @@
         <ol class="steps"><li>Scan with Windows PnP + pnputil.</li><li>Match by Hardware ID to Microsoft Update Catalog / vendor pages.</li><li>Back up with pnputil export before installing. Free, no paywall.</li></ol>
       </div>
     </section>
-    <section id="view-updates" class="view hidden"><div id="updates" class="list"></div></section>
+    <section id="view-updates" class="view hidden">
+      <div class="card updateall"><div><h3>One-click update</h3><p class="muted">Backs up drivers, then downloads + installs every live Catalog update.</p></div>
+      <div class="row"><button id="btn-update-all" class="btn primary">Update all</button><span id="job-msg" class="muted"></span></div>
+      <div id="job-bar" class="bar hidden"><div id="job-fill"></div></div><div id="job-log" class="list"></div></div>
+      <div id="updates" class="list"></div></section>
     <section id="view-devices" class="view hidden"><div id="devices" class="list"></div></section>
     <section id="view-backup" class="view hidden">
       <div class="card"><h3>Driver backup</h3><p class="muted">Exports all third-party drivers with pnputil. Restore from Device Manager → Have Disk.</p>

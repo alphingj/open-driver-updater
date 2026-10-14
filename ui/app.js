@@ -59,4 +59,22 @@ $('#btn-scan').onclick = scan;
 $('#btn-backup').onclick = async () => { $('#backup-msg').textContent = 'Exporting…'; const j = await api('/api/backup',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); $('#backup-msg').textContent = j.ok ? 'Done: ' + j.path : 'Failed — run as admin. ' + (j.log || ''); loadBackups(); };
 $('#btn-sched-on').onclick = async () => { const j = await api('/api/schedule/enable',{method:'POST'}); $('#sched-msg').textContent = j.ok ? 'Weekly scan enabled.' : 'Failed: ' + j.log; };
 $('#btn-sched-off').onclick = async () => { const j = await api('/api/schedule/disable',{method:'POST'}); $('#sched-msg').textContent = j.ok ? 'Disabled.' : 'Failed: ' + j.log; };
+let jobTimer = null;
+$('#btn-update-all').onclick = async () => {
+  const live = state.updates.filter(u => u.update_id);
+  if (!live.length) { $('#job-msg').textContent = 'Run a Live Catalog scan first.'; return; }
+  if (!confirm(`Install ${live.length} driver updates? A backup runs first. Admin rights required.`)) return;
+  const j = await api('/api/update-all',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({updates: live})});
+  if (!j.ok) { $('#job-msg').textContent = j.error || 'Could not start.'; return; }
+  $('#job-bar').classList.remove('hidden');
+  clearInterval(jobTimer);
+  jobTimer = setInterval(async () => {
+    const s = await api('/api/job');
+    const pct = s.total ? Math.round(100 * s.done / s.total) : 0;
+    $('#job-fill').style.width = pct + '%';
+    $('#job-msg').textContent = s.running ? `Working ${s.done}/${s.total} — ${s.current}` : (s.total ? `Done ${s.done}/${s.total}.` : '');
+    $('#job-log').innerHTML = (s.results || []).map(r => `<div class="row-item"><div><div class="t">${esc(r.device)}</div><div class="s">${esc(r.detail || '')}</div></div><span class="tag ${r.ok ? 'good' : 'bad'}">${r.ok ? 'installed' : 'skipped'}</span></div>`).join('');
+    if (!s.running && s.total) { clearInterval(jobTimer); scan(); }
+  }, 2000);
+};
 scan();

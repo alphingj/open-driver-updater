@@ -2,6 +2,9 @@
 from __future__ import annotations
 import json
 import os
+import tempfile
+import threading
+import time
 import urllib.parse
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -11,6 +14,48 @@ SRC = os.path.join(BASE, "src")
 import sys
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
+
+JOB: dict = {"running": False, "total": 0, "done": 0, "current": "",
+             "results": [], "started": 0.0, "backup": None}
+
+
+def _job_run(items: list[dict]) -> None:
+    from odu import arch as arch_mod
+    from odu import backup as backup_mod
+    from odu import catalog as catalog_mod
+    from odu import installer as installer_mod
+    JOB.update(running=True, total=len(items), done=0, current="",
+               results=[], started=time.time(), backup=None)
+    try:
+        dest = os.path.join(os.path.expanduser("~"), "odu-backup")
+        JOB["current"] = "Backing up existing drivers…"
+        JOB["backup"] = backup_mod.backup_all(dest)
+        dl_dir = os.path.join(tempfile.gettempdir(), "odu-dl")
+        for it in items:
+            name = it.get("device_name", "?")
+            JOB["current"] = f"Resolving {name}…"
+            res: dict = {"device": name, "hwid": it.get("hwid", ""),
+                         "ok": False, "detail": ""}
+            try:
+                urls = catalog_mod.get_download_urls(it.get("update_id", ""))
+                if not urls:
+                    res["detail"] = "no CAB published for this update"
+                else:
+                    JOB["current"] = f"Downloading {name}…"
+                    cab = installer_mod.download(urls[0]["url"], dl_dir)
+                    JOB["current"] = f"Installing {name}…"
+                    inst = installer_mod.install_cab(cab, arch_mod.canonical_arch())
+                    res["ok"] = bool(inst.get("ok"))
+                    res["detail"] = (inst.get("inf", "") + " :: "
+                                     + str(inst.get("log", ""))[-300:])
+            except Exception as e:  # keep going through the queue
+                res["detail"] = str(e)[-300:]
+            JOB["results"].append(res)
+            JOB["done"] += 1
+            JOB["current"] = ""
+    finally:
+        JOB["running"] = False
+        JOB["current"] = ""
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -50,6 +95,8 @@ class Handler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/schedule":
             from odu import scheduler
             return self._json(scheduler.status())
+        if parsed.path == "/api/job":
+            return self._json(JOB)
         return super().do_GET()
 
     def do_POST(self):
@@ -81,6 +128,16 @@ class Handler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/schedule/disable":
             from odu import scheduler
             return self._json(scheduler.disable())
+        if parsed.path == "/api/update-all":
+            if JOB.get("running"):
+                return self._json({"ok": False, "error": "a job is already running"}, 409)
+            items = [u for u in (data.get("updates") or [])
+                     if u.get("update_id")]
+            if not items:
+                return self._json({"ok": False,
+                                    "error": "no live Catalog updates — run a Live scan first"}, 400)
+            threading.Thread(target=_job_run, args=(items,), daemon=True).start()
+            return self._json({"ok": True, "total": len(items)})
         return self._json({"ok": False, "error": "unknown route"}, 404)
 
 

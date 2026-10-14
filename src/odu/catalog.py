@@ -11,6 +11,7 @@ from .models import Device, DriverUpdate
 from . import store as store_mod
 
 MS_CATALOG_SEARCH = "https://www.catalog.update.microsoft.com/Search.aspx?q="
+MS_CATALOG_DIALOG = "https://www.catalog.update.microsoft.com/DownloadDialog.aspx"
 
 VENDOR_HINTS: list[tuple[str, str, str]] = [
     ("VEN_8086", "Intel", "https://www.intel.com/content/www/us/en/download-center.html"),
@@ -95,6 +96,43 @@ def _check_ms_catalog_query(query: str, timeout: int = 15) -> list[dict]:
     return out
 
 
+def get_download_urls(update_id: str, timeout: int = 30) -> list[dict]:
+    """Resolve a Catalog update GUID to direct CAB URLs (POSTs the basket form).
+
+    Returns [{url, sha256, digest}]. Empty list when the dialog has no files.
+    """
+    update_id = (update_id or "").strip()
+    if not re.fullmatch(r"[0-9a-f-]{36}", update_id, re.I):
+        return []
+    payload = f'[{{"size":0,"languages":"","uidInfo":"{update_id}","updateID":"{update_id}"}}]'
+    data = urllib.parse.urlencode({
+        "updateIDs": payload, "updateIDsBlockedForImport": "", "contentImport": "",
+        "sku": "", "serverName": "", "ssl": "", "portNumber": "",
+        "version": "", "protocol": "",
+    }).encode()
+    try:
+        req = urllib.request.Request(
+            MS_CATALOG_DIALOG, data=data,
+            headers={"User-Agent": "Mozilla/5.0",
+                     "Content-Type": "application/x-www-form-urlencoded"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            html = r.read().decode("utf-8", "ignore")
+    except Exception:
+        return []
+    urls = re.findall(
+        r"files\[\d+\]\.url\s*=\s*'(https://[a-z0-9.\-]*download\.windowsupdate\.com/[^']+)'",
+        html, re.I)
+    sha = dict(re.findall(
+        r"files\[(\d+)\]\.sha256\s*=\s*'([A-Za-z0-9+/=]+)'", html))
+    out, seen = [], set()
+    for i, u in enumerate(urls):
+        if u in seen:
+            continue
+        seen.add(u)
+        out.append({"url": u, "sha256": sha.get(str(i), "")})
+    return out
+
+
 def resolve_updates(devices: list[Device], arch: str | None = None,
                     live_catalog: bool = False) -> list[DriverUpdate]:
     arch = canonical_arch(arch)
@@ -116,7 +154,8 @@ def resolve_updates(devices: list[Device], arch: str | None = None,
                     hwid=hwid, device_name=dev.friendly_name or dev.instance_id,
                     instance_id=dev.instance_id, installed_version=dev.driver_version,
                     available_version=f["title"][:64], source="ms-catalog",
-                    download_url=f["url"], arch=arch, title=f["title"]))
+                    download_url=f["url"], arch=arch, title=f["title"],
+                    update_id=f["id"]))
                 continue
         if needs:
             updates.append(DriverUpdate(
