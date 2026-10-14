@@ -18,7 +18,7 @@
       <button data-view="schedule">Schedule</button>
       <button data-view="excluded">Excluded</button>
     </nav>
-    <div class="side-foot"><span id="arch" class="mono">…</span><span class="dot"></span><span>WHQL via MS Catalog</span></div>
+    <div class="side-foot"><span id="arch" class="mono">…</span><span class="dot"></span><span>Drivers via MS Catalog</span></div>
   </aside>
   <main class="content">
     <header class="topbar">
@@ -28,6 +28,7 @@
         <label class="switch"><input type="checkbox" id="live"><span></span>Live Catalog</label>
       </div>
     </header>
+    <p id="scan-msg" class="muted" role="status"></p>
     <section id="view-overview" class="view">
       <div class="cards">
         <div class="card hero"><div class="k" id="stat-devices">–</div><div class="l">Devices found</div></div>
@@ -57,5 +58,6 @@
   </main>
 </div>
 <script src="app.js"></script>
+<noscript><div class="card">Open Driver Updater needs JavaScript for its interface. Use <code>python -m odu.cli scan</code> instead.</div></noscript>
 </body>
 </html>

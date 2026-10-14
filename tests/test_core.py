@@ -1,25 +1,152 @@
-import sys, os
+"""Stdlib unittest suite (no pytest needed): python -m unittest discover -s tests."""
+import json
+import os
+import sys
+import tempfile
+import unittest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-from odu.arch import canonical_arch, inf_arch_tags, is_arch_compatible
-from odu.models import Device
-from odu import catalog
 
 
-def test_arch():
-    assert canonical_arch("AMD64") == "x64"
-    assert canonical_arch("ARM64") == "arm64"
-    assert canonical_arch("x86") == "x86"
-    assert "NTARM64" in inf_arch_tags("arm64")
-    assert "NTAMD64" in inf_arch_tags("x64")
-    assert is_arch_compatible("[Manufacturer.NTAMD64]", "x64")
+class ArchTest(unittest.TestCase):
+    def test_canonical(self):
+        from odu.arch import canonical_arch
+        self.assertEqual(canonical_arch("AMD64"), "x64")
+        self.assertEqual(canonical_arch("x86_64"), "x64")
+        self.assertEqual(canonical_arch("ARM64"), "arm64")
+        self.assertEqual(canonical_arch("aarch64"), "arm64")
+        self.assertEqual(canonical_arch("x86"), "x86")
+
+    def test_native_arch_wow64(self):
+        from odu import arch
+        old = dict(os.environ)
+        try:
+            os.environ["PROCESSOR_ARCHITEW6432"] = "AMD64"
+            os.environ["PROCESSOR_ARCHITECTURE"] = "x86"
+            self.assertEqual(arch.native_arch(), "x64")
+            os.environ["PROCESSOR_ARCHITEW6432"] = "ARM64"
+            self.assertEqual(arch.native_arch(), "arm64")
+        finally:
+            os.environ.clear()
+            os.environ.update(old)
+
+    def test_strict_tags(self):
+        from odu.arch import inf_arch_tags, is_arch_compatible
+        self.assertEqual(inf_arch_tags("x64"), ("NTAMD64", "NT"))
+        self.assertEqual(inf_arch_tags("arm64"), ("NTARM64", "NT"))
+        self.assertTrue(is_arch_compatible("[Manufacturer]", "x64"))
+        self.assertTrue(is_arch_compatible("[Manufacturer.NTAMD64]", "x64"))
+        self.assertFalse(is_arch_compatible("[Manufacturer.NTAMD64]", "arm64"))
+        self.assertFalse(is_arch_compatible("[Manufacturer.NTX86]", "x64"))
+        self.assertTrue(is_arch_compatible("[Manufacturer.NTARM64]", "arm64"))
+
+    def test_query_candidates(self):
+        from odu.catalog import query_candidates
+        self.assertEqual(query_candidates("USB\\VID_A&PID_B&REV_C&MI_00"),
+                         ["USB\\VID_A&PID_B&REV_C&MI_00", "USB\\VID_A&PID_B",
+                          "USB\\VID_A"])
+        self.assertEqual(query_candidates(""), [])
 
 
-def test_resolve_skips_excluded(tmp_path, monkeypatch):
-    monkeypatch.setenv("ODU_DB", str(tmp_path / "t.db"))
-    devs = [Device(instance_id="X", friendly_name="GPU", hwid=["PCI\\VEN_10DE&DEV_1234"],
-                   status="ERROR", problem_code=28)]
-    ups = catalog.resolve_updates(devs, "x64", live_catalog=False)
-    assert len(ups) == 1 and ups[0].source == "ms-catalog"
-    from odu import store
-    store.add_exclusion("PCI\\VEN_10DE&DEV_1234")
-    assert catalog.resolve_updates(devs, "x64", live_catalog=False) == []
+class StoreEnvTest(unittest.TestCase):
+    def test_lazy_db_path(self):
+        from odu import store
+        with tempfile.TemporaryDirectory() as d:
+            db = os.path.join(d, "t.db")
+            os.environ["ODU_DB"] = db
+            try:
+                store.add_exclusion("HWID1")
+                self.assertEqual(store.get_exclusions(), ["HWID1"])
+                self.assertTrue(os.path.isfile(db))
+                store.remove_exclusion("HWID1")
+                self.assertEqual(store.get_exclusions(), [])
+            finally:
+                del os.environ["ODU_DB"]
+
+
+class ResolveTest(unittest.TestCase):
+    def _devs(self):
+        from odu.models import Device
+        return [
+            Device(instance_id="GPU", friendly_name="GPU",
+                   hwid=["PCI\\VEN_10DE&DEV_1234"], status="ERROR", problem_code=28),
+            Device(instance_id="GHOST", friendly_name="Ghost USB",
+                   hwid=["USB\\VID_1&PID_2"], status="DISCONNECTED", problem_code=45),
+            Device(instance_id="VIRT", friendly_name="Volume",
+                   hwid=["STORAGE\\Volume"], status="OK", problem_code=0,
+                   driver_version="1.0"),
+        ]
+
+    def test_skips_ghost_virtual_excluded(self):
+        from odu import catalog, store
+        with tempfile.TemporaryDirectory() as d:
+            os.environ["ODU_DB"] = os.path.join(d, "t.db")
+            try:
+                ups = catalog.resolve_updates(self._devs(), "x64", live_catalog=False)
+                self.assertEqual(len(ups), 1)
+                self.assertEqual(ups[0].source, "ms-catalog")
+                self.assertEqual(ups[0].vendor, "NVIDIA")
+                self.assertTrue(ups[0].vendor_url)
+                store.add_exclusion("PCI\\VEN_10DE&DEV_1234")
+                self.assertEqual(catalog.resolve_updates(self._devs(), "x64"), [])
+            finally:
+                del os.environ["ODU_DB"]
+
+
+class CatalogParseTest(unittest.TestCase):
+    GOLDEN = """
+    <a id='aaaabbbb-cccc-dddd-eeee-ffffffffffff_link' href= "javascript:void(0);"
+     onclick='goToDetails("aaaabbbb-cccc-dddd-eeee-ffffffffffff");'
+     class="contentTextItemSpacerNoBreakLink">Acme &amp; Co - Net - 2.0</a>
+    <span id="aaaabbbb-cccc-dddd-eeee-ffffffffffff_originalSize">12345</span>
+    """
+
+    def test_guid_title_size(self):
+        from odu import catalog
+        guids = __import__("re").findall(
+            r"goToDetails\(\"(" + catalog._GUID + r")\"\)", self.GOLDEN, __import__("re").I)
+        self.assertEqual(guids, ["aaaabbbb-cccc-dddd-eeee-ffffffffffff"])
+        # exercise the real parser by monkeypatching the fetcher
+        orig = catalog._fetch
+        catalog._fetch = lambda url, timeout, data=None: self.GOLDEN  # noqa: E731
+        try:
+            out = catalog._check_ms_catalog_query("ACME")
+        finally:
+            catalog._fetch = orig
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["title"], "Acme & Co - Net - 2.0")
+        self.assertEqual(out[0]["size"], 12345)
+
+
+class InstallerPickTest(unittest.TestCase):
+    def _write(self, d, name, text):
+        p = os.path.join(d, name)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(text)
+        return p
+
+    def test_pick_arch(self):
+        from odu import installer
+        with tempfile.TemporaryDirectory() as d:
+            hdr = self._write(d, "hdr.inf",
+                              "[Manufacturer.NTX86]\n%M%=M,NTX86\n")
+            ent = self._write(d, "ent.inf",
+                              "[Manufacturer]\n%M%=Models,NTAMD64\n")
+            plain = self._write(d, "plain.inf",
+                                "[Manufacturer]\n%M%=Models\n")
+            self.assertEqual(installer.pick_inf([hdr, ent], "x64"), ent)
+            self.assertEqual(installer.pick_inf([hdr, ent], "x86"), hdr)
+            self.assertEqual(installer.pick_inf([hdr], "arm64"), "")
+            self.assertEqual(installer.pick_inf([plain], "arm64"), plain)
+
+
+class PayloadValidationTest(unittest.TestCase):
+    def test_guid_filter(self):
+        from odu.webapp import _GUID_RE
+        self.assertTrue(_GUID_RE.match("13c843c5-150b-4622-b619-2304d557ed66"))
+        self.assertFalse(_GUID_RE.match("not-a-guid"))
+        self.assertFalse(_GUID_RE.match("13c843c5-150b-4622-b619-2304d557ed66 "))
+
+
+if __name__ == "__main__":
+    unittest.main()

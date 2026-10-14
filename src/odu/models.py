@@ -32,6 +32,8 @@ class DriverUpdate:
     arch: str = ""
     title: str = ""
     update_id: str = ""  # MS Catalog GUID; enables one-click CAB download
+    vendor: str = ""
+    vendor_url: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
