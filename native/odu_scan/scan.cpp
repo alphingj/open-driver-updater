@@ -1,5 +1,5 @@
 // odu_scan - instant device enumeration via SetupAPI (no PowerShell).
-// Emits a JSON array: instance_id, friendly_name, dev_class, manufacturer,
+// Emits UTF-8 JSON: instance_id, friendly_name, dev_class, manufacturer,
 // status (OK/ERROR/DISCONNECTED), problem_code, hwid[], ven_dev,
 // driver_version, driver_date, driver_provider.
 #define WIN32_LEAN_AND_MEAN
@@ -13,6 +13,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "odu_hw.h"
+
+/* Get-PnpDevice parity: problem 45 = disconnected (ghost) device.
+ * (CM_PROB_PHANTOM is already defined by cfg.h with this value.) */
 
 #pragma comment(lib, "SetupAPI.Lib")
 #pragma comment(lib, "Cfgmgr32.Lib")
@@ -35,21 +38,24 @@ static void json_escape(FILE *f, const char *s) {
     }
 }
 
-static void get_reg_str(HDEVINFO h, PSP_DEVINFO_DATA d, DWORD prop,
-                        char *out, size_t cap) {
-    DWORD type = 0, need = 0;
-    out[0] = '\0';
-    if (!SetupDiGetDeviceRegistryPropertyA(h, d, prop, &type,
-                                           (PBYTE)out, (DWORD)cap, &need))
-        out[0] = '\0';
-    out[cap - 1] = '\0';
-}
-
 static void wstr_to_utf8(const WCHAR *w, char *out, size_t cap) {
     out[0] = '\0';
     if (!w) return;
+    if (cap == 0) return;
     WideCharToMultiByte(CP_UTF8, 0, w, -1, out, (int)cap, NULL, NULL);
     out[cap - 1] = '\0';
+}
+
+static void get_reg_str(HDEVINFO h, PSP_DEVINFO_DATA d, DWORD prop,
+                        char *out, size_t cap) {
+    WCHAR w[512];
+    DWORD type = 0, need = 0;
+    out[0] = '\0';
+    if (cap == 0) return;
+    if (!SetupDiGetDeviceRegistryPropertyW(h, d, prop, &type,
+                                           (PBYTE)w, sizeof(w), &need))
+        return;
+    wstr_to_utf8(w, out, cap);
 }
 
 static void read_driver_info(HDEVINFO h, PSP_DEVINFO_DATA d,
@@ -149,7 +155,6 @@ int main(void) {
             const char *p = hwids;
             int n = 0;
             while (*p && n < 8) {
-                char vd[32] = "";
                 if (n) printf(",");
                 printf("\"");
                 json_escape(stdout, p);
@@ -159,11 +164,18 @@ int main(void) {
             }
         }
         {
+            /* First VEN&DEV (or VID&PID) pair across all HWIDs. */
             char vd[32] = "";
-            const char *p = hwids;
+            if (has_hw) {
+                const char *p = hwids;
+                while (*p) {
+                    if (odu_hwid_ven_dev(p, vd)) break;
+                    vd[0] = '\0';
+                    p += strlen(p) + 1;
+                }
+            }
             printf("],\"ven_dev\":\"");
-            if (has_hw && *p && odu_hwid_ven_dev(p, vd))
-                json_escape(stdout, vd);
+            json_escape(stdout, vd);
             printf("\",\"driver_version\":\"");
             json_escape(stdout, ver);
             printf("\",\"driver_date\":\"");

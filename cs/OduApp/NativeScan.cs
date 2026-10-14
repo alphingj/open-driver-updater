@@ -17,16 +17,19 @@ namespace OduApp
 
         public static string FindScanner()
         {
+            // Prefer the binary matching the OS arch; x64 runs emulated on
+            // ARM64 Windows, x86-only systems need the x86 build.
+            string[] order = ArchUtil.NativeArch() == "x86"
+                ? new string[] { "x86", "x64" }
+                : new string[] { "x64", "x86" };
             string root = ExeDir();
             for (int up = 0; up < 6 && root != null; up++)
             {
-                string[] cands = new string[]
+                foreach (string sub in order)
                 {
-                    Path.Combine(root, "native", "bin", "x64", "odu_scan.exe"),
-                    Path.Combine(root, "native", "bin", "x86", "odu_scan.exe"),
-                };
-                foreach (string c in cands)
+                    string c = Path.Combine(root, "native", "bin", sub, "odu_scan.exe");
                     if (File.Exists(c)) return c;
+                }
                 root = Path.GetDirectoryName(root);
             }
             return "";

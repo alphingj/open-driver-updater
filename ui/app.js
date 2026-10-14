@@ -128,7 +128,13 @@ $('#btn-update-all').onclick = async () => {
   } catch (e) { $('#job-msg').textContent = 'Could not start: ' + e.message; return; }
   $('#job-bar').classList.remove('hidden');
   clearInterval(jobTimer);
-  jobTimer = setInterval(async () => {
+  jobTimer = setInterval(pollJob, 2000);
+};
+$('#btn-stop').onclick = async () => {
+  $('#job-msg').textContent = 'Cancelling after the current driver…';
+  try { await api('/api/cancel', { method: 'POST' }); } catch (e) { /* job will notice */ }
+};
+async function pollJob() {
     let s;
     try { s = await api('/api/job'); } catch (e) { return; }
     const pct = s.total ? Math.round(100 * s.done / s.total) : 0;
@@ -138,6 +144,5 @@ $('#btn-update-all').onclick = async () => {
     $('#job-log').innerHTML = (s.results || []).map(r => `<div class="row-item"><div><div class="t">${esc(r.device)}</div><div class="s">${esc(r.detail || '')}</div></div><span class="tag ${r.ok ? 'good' : 'bad'}">${r.ok ? 'ok' : 'failed'}</span></div>`).join('')
       + ((!s.running && s.total) ? `<div class="card"><b>${failed ? 'Finished with errors — review the log above.' : 'All updates installed.'} A restart may be required for drivers to take effect.</b></div>` : '');
     if (!s.running && s.total) { clearInterval(jobTimer); scan(); }
-  }, 2000);
-};
+}
 scan();

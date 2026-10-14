@@ -11,6 +11,7 @@ extern "C" {
 #endif
 
 /* Canonical OS arch tags returned in out (always NUL-terminated). */
+#define ODU_VERSION "0.2.0"
 #define ODU_ARCH_X86   "x86"
 #define ODU_ARCH_X64   "x64"
 #define ODU_ARCH_ARM64 "arm64"
@@ -24,7 +25,7 @@ void odu_canonical_arch(const char *machine, char *out);
 void odu_hwid_vendor(const char *hwid, char *out);
 
 /* Extract the "VEN_xxxx&DEV_xxxx" (or VID/PID) pair buried in a HWID.
- * Returns 1 and fills out ( >= 22 bytes) on success, else 0. */
+ * Returns 1 and fills out (must hold at least 32 bytes) on success, else 0. */
 int odu_hwid_ven_dev(const char *hwid, char *out);
 
 /* 1 when an INF Manufacturer decoration ("" , ".NTAMD64", ...) is installable

@@ -8,3 +8,5 @@ cs/bin/
 *.obj
 *.lib
 *.exe
+installer/Output/
+

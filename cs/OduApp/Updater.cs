@@ -7,10 +7,15 @@ namespace OduApp
 {
     public static class Updater
     {
+        private static volatile bool _cancel;
+
+        public static void Cancel() { _cancel = true; }
+
         public static List<JobItem> RunAll(List<DriverUpdate> items, string arch,
                                            Action<string> progress)
         {
             var results = new List<JobItem>();
+            _cancel = false;
             if (progress != null) progress("Backing up existing drivers…");
             OpResult backup = Ops.BackupAll(
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
@@ -35,6 +40,16 @@ namespace OduApp
             try { Directory.CreateDirectory(dl); } catch { }
             foreach (DriverUpdate u in items)
             {
+                if (_cancel)
+                {
+                    var c = new JobItem();
+                    c.Device = "Update queue";
+                    c.HwId = "";
+                    c.Ok = false;
+                    c.Detail = "cancelled by user; remaining drivers untouched";
+                    results.Add(c);
+                    break;
+                }
                 var r = new JobItem();
                 r.Device = u.DeviceName;
                 r.HwId = u.HwId;
@@ -43,7 +58,7 @@ namespace OduApp
                 try
                 {
                     if (progress != null) progress("Resolving " + u.DeviceName + "…");
-                    List<Catalog.CabFile> urls = Catalog.DownloadUrls(u.UpdateId, 0);
+                    List<Catalog.CabFile> urls = Catalog.DownloadUrls(u.UpdateId, u.Size);
                     if (urls.Count == 0)
                     {
                         r.Detail = "no CAB published for this update";
@@ -64,12 +79,13 @@ namespace OduApp
                             }
                             if (progress != null) progress("Installing " + u.DeviceName + "…");
                             OpResult inst = Ops.InstallCab(cab, arch);
-                            try { File.Delete(cab); } catch { }
+                            // Keep failed CABs for offline retry/debug; drop successes.
+                            if (inst.Ok) { try { File.Delete(cab); } catch { } }
                             okAll = okAll && inst.Ok;
-                            logs += (inst.Path != "" ? inst.Path + " :: " : "") + inst.Log + " | ";
+                            logs += (inst.Path != "" ? inst.Path + " :: " : "") + inst.Log + " ||| ";
                         }
                         r.Ok = okAll;
-                        r.Detail = logs.Length > 300 ? logs.Substring(logs.Length - 300) : logs;
+                        r.Detail = logs.Length > 2000 ? logs.Substring(logs.Length - 2000) : logs;
                     }
                 }
                 catch (Exception e)

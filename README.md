@@ -21,14 +21,27 @@ C# and Python share the same native scanner (`native/bin/*/odu_scan.exe`).
 Driver matching always uses the **OS** architecture (WOW64-safe), INF tags
 (`NTX86`/`NTAMD64`/`NTARM64`) matched exactly — no wrong-arch installs.
 
+## Install (recommended)
+
+```powershell
+installer\Output\OpenDriverUpdater-Setup-0.2.0.exe
+```
+
+Per-user install, no admin needed to install: Start Menu shortcut, Add/Remove
+entry, both scanner archs (auto-selected at runtime). Run the app elevated when
+backing up or installing drivers. Uninstaller removes the app and its scheduled
+task; driver backups in `~\odu-backup` are kept.
+
 ## Build
 
 ```bat
 native\build.bat   :: MSVC 2022: odu_hw.lib + odu_scan.exe (x64+x86) + C selftest
 cs\build.bat       :: in-box Framework csc: OduApp.exe (no SDK/NuGet needed)
+cs\test.bat        :: C# test runner, 20 asserts, exit code
+"C:\Program Files\Inno Setup 7\ISCC.exe" installer\setup.iss
 ```
 
-Requires VS2022 with MSVC + Windows SDK (both already used here).
+Requires VS2022 with MSVC + Windows SDK, and Inno Setup 7 for the installer.
 
 ## Run
 

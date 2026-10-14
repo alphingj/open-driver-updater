@@ -89,12 +89,17 @@ def scan_native(exe: str | None = None, timeout: int = 60) -> list[Device]:
 
 
 def find_scanner() -> str:
-    """Locate native/bin/{x64,x86}/odu_scan.exe from a source checkout."""
+    """Locate odu_scan.exe from a source checkout, OS-arch first.
+
+    x64 runs emulated on ARM64 Windows; x86-only systems need the x86 build.
+    """
     import os
+    from .arch import native_arch
+    order = ("x86", "x64") if native_arch() == "x86" else ("x64", "x86")
     here = os.path.abspath(__file__)
     for _ in range(5):
         here = os.path.dirname(here)
-        for sub in ("x64", "x86"):
+        for sub in order:
             cand = os.path.join(here, "native", "bin", sub, "odu_scan.exe")
             if os.path.isfile(cand):
                 return cand
@@ -106,9 +111,9 @@ def scan_powershell() -> list[Device]:
     if not raw.strip():
         return []
     try:
-        dev_json, hw_json, drv_json = raw.split("__ODU_HW__", 1)[0], "", ""
-        rest = raw.split("__ODU_HW__", 1)[1]
-        hw_json, drv_json = rest.split("__ODU_DRV__", 1)
+        parts = raw.split("__ODU_HW__", 1)
+        dev_json = parts[0]
+        hw_json, drv_json = parts[1].split("__ODU_DRV__", 1)
     except (IndexError, ValueError):
         return []
     devs: list[Device] = []

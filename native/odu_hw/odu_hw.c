@@ -90,7 +90,8 @@ int odu_arch_tag_ok(const char *decoration, const char *arch) {
     for (i = 0; i < sizeof(d) - 1 && decoration && decoration[i]; i++)
         d[i] = (char)toupper((unsigned char)decoration[i]);
     d[i] = '\0';
-    /* Strip a leading dot: ".NTAMD64" -> "NTAMD64". */
+    /* Strip a leading dot: ".NTAMD64" -> "NTAMD64".
+     * (memmove length strlen(d) deliberately includes the NUL.) */
     if (d[0] == '.') memmove(d, d + 1, strlen(d));
     if (d[0] == '\0') return 1; /* undecorated matches everything */
     odu_canonical_arch(arch, a);

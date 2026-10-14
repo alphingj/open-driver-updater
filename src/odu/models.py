@@ -32,6 +32,7 @@ class DriverUpdate:
     arch: str = ""
     title: str = ""
     update_id: str = ""  # MS Catalog GUID; enables one-click CAB download
+    size: int = 0  # Catalog-reported bytes; sent with the download request
     vendor: str = ""
     vendor_url: str = ""
 

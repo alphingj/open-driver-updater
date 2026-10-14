@@ -8,6 +8,9 @@ namespace OduApp
 {
     public static class Store
     {
+        // Serializes all file access: parallel catalog lookups share cache.json.
+        private static readonly object FileLock = new object();
+
         public static string Dir()
         {
             string d = Path.Combine(
@@ -19,14 +22,20 @@ namespace OduApp
 
         private static string Read(string name)
         {
-            try { return File.ReadAllText(Path.Combine(Dir(), name), Encoding.UTF8); }
-            catch { return null; }
+            lock (FileLock)
+            {
+                try { return File.ReadAllText(Path.Combine(Dir(), name), Encoding.UTF8); }
+                catch { return null; }
+            }
         }
 
         private static void Write(string name, string content)
         {
-            try { File.WriteAllText(Path.Combine(Dir(), name), content, Encoding.UTF8); }
-            catch { }
+            lock (FileLock)
+            {
+                try { File.WriteAllText(Path.Combine(Dir(), name), content, Encoding.UTF8); }
+                catch { }
+            }
         }
 
         private static List<string> ReadList(string name)
@@ -68,33 +77,29 @@ namespace OduApp
             Write("exclusions.json", sb.Append("]").ToString());
         }
 
+        // Cache record: {"k":key,"t":epoch-sec,"v":escaped-value}.
+        // Values are stored escaped exactly once (JStr); reads unescape once.
+        // The record regex tolerates '{' '}' inside string values.
+        private const string RecPat =
+            "\\{\"k\":\"((?:[^\"\\\\]|\\\\.)*)\",\"t\":(\\d+),\"v\":\"((?:[^\"\\\\]|\\\\.)*)\"\\}";
+
+        private static string Unesc(string s)
+        {
+            return s.Replace("\\\"", "\"").Replace("\\\\", "\\");
+        }
+
         public static string CacheGet(string key)
         {
             string t = Read("cache.json");
             if (t == null) return null;
             foreach (System.Text.RegularExpressions.Match m in
-                System.Text.RegularExpressions.Regex.Matches(t, "\\{[^{}]*\\}"))
+                System.Text.RegularExpressions.Regex.Matches(t, RecPat))
             {
-                string block = m.Value;
-                if (block.Contains("\"k\":" + JStr(key)))
-                {
-                    System.Text.RegularExpressions.Match ts =
-                        System.Text.RegularExpressions.Regex.Match(block, "\"t\":(\\d+)");
-                    long when;
-                    if (ts.Success && long.TryParse(ts.Groups[1].Value, out when))
-                    {
-                        long now = DateTime.UtcNow.Ticks / 10000000L;
-                        if (now - when < 7 * 24 * 3600)
-                        {
-                            System.Text.RegularExpressions.Match v =
-                                System.Text.RegularExpressions.Regex.Match(
-                                    block, "\"v\":\"((?:[^\"\\\\]|\\\\.)*)\"");
-                            if (v.Success)
-                                return v.Groups[1].Value.Replace("\\\"", "\"").Replace("\\\\", "\\");
-                        }
-                    }
-                    return null;
-                }
+                if (Unesc(m.Groups[1].Value) != key) continue;
+                long when;
+                if (!long.TryParse(m.Groups[2].Value, out when)) return null;
+                if (DateTime.UtcNow.Ticks / 10000000L - when >= 7 * 24 * 3600) return null;
+                return Unesc(m.Groups[3].Value);
             }
             return null;
         }
@@ -106,31 +111,22 @@ namespace OduApp
             if (t != null)
             {
                 foreach (System.Text.RegularExpressions.Match m in
-                    System.Text.RegularExpressions.Regex.Matches(t, "\\{[^{}]*\\}"))
+                    System.Text.RegularExpressions.Regex.Matches(t, RecPat))
                 {
-                    string block = m.Value;
-                    System.Text.RegularExpressions.Match k =
-                        System.Text.RegularExpressions.Regex.Match(
-                            block, "\"k\":\"((?:[^\"\\\\]|\\\\.)*)\"");
-                    System.Text.RegularExpressions.Match ts =
-                        System.Text.RegularExpressions.Regex.Match(block, "\"t\":(\\d+)");
-                    System.Text.RegularExpressions.Match v =
-                        System.Text.RegularExpressions.Regex.Match(
-                            block, "\"v\":\"((?:[^\"\\\\]|\\\\.)*)\"");
                     long when;
-                    if (k.Success && v.Success && ts.Success &&
-                        long.TryParse(ts.Groups[1].Value, out when))
-                        all[k.Groups[1].Value] = new KeyValuePair<string, long>(v.Groups[1].Value, when);
+                    if (long.TryParse(m.Groups[2].Value, out when))
+                        all[Unesc(m.Groups[1].Value)] =
+                            new KeyValuePair<string, long>(Unesc(m.Groups[3].Value), when);
                 }
             }
-            all[key] = new KeyValuePair<string, long>(Esc(value),
+            all[key] = new KeyValuePair<string, long>(value,
                 DateTime.UtcNow.Ticks / 10000000L);
             var sb = new StringBuilder("[");
             bool first = true;
             int kept = 0;
             foreach (KeyValuePair<string, KeyValuePair<string, long>> kv in all)
             {
-                if (kept++ > 500) break;
+                if (kept++ >= 500) break;
                 if (!first) sb.Append(",");
                 first = false;
                 sb.Append("{\"k\":").Append(JStr(kv.Key)).Append(",\"t\":")
@@ -144,16 +140,23 @@ namespace OduApp
             return "\"" + (s ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
         }
 
-        private static string Esc(string s)
-        {
-            return (s ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"");
-        }
-
         public static void RecordBackup(string name, string path)
         {
             string line = DateTime.UtcNow.ToString("o") + "|" + name + "|" + path + "\r\n";
-            try { File.AppendAllText(Path.Combine(Dir(), "backups.log"), line, Encoding.UTF8); }
-            catch { }
+            lock (FileLock)
+            {
+                try
+                {
+                    string f = Path.Combine(Dir(), "backups.log");
+                    File.AppendAllText(f, line, Encoding.UTF8);
+                    // Cap the log: keep the newest 200 entries.
+                    string[] lines = File.ReadAllLines(f, Encoding.UTF8);
+                    if (lines.Length > 200)
+                        File.WriteAllLines(f, new System.Collections.Generic.List<string>(
+                            lines).GetRange(lines.Length - 200, 200), Encoding.UTF8);
+                }
+                catch { }
+            }
         }
 
         public static List<string[]> Backups()

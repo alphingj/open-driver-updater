@@ -148,5 +148,67 @@ class PayloadValidationTest(unittest.TestCase):
         self.assertFalse(_GUID_RE.match("13c843c5-150b-4622-b619-2304d557ed66 "))
 
 
+class SearchUrlTest(unittest.TestCase):
+    def test_vendev_preferred(self):
+        from odu.catalog import search_url_for
+        u = search_url_for("ACP\\DEVTYPE_0001&DEVREV_0000&VEN_1022&DEV_15E2&SUBSYS_10431603&REV_6F")
+        self.assertTrue(u.endswith("q=VEN_1022%26DEV_15E2"), u)
+        u2 = search_url_for("USB\\VID_35B5&PID_3500&REV_0C02")
+        self.assertTrue(u2.endswith("q=VID_35B5%26PID_3500"), u2)
+
+    def test_cut_surrogate(self):
+        from odu.catalog import _cut
+        self.assertEqual(_cut("abcdef", 64), "abcdef")
+        # Python strings are code-point based (no surrogates since 3.3);
+        # _cut is a safeguard that must preserve astral chars intact.
+        self.assertEqual(_cut("abc\U0001F600def", 4), "abc\U0001F600")
+
+    def test_no_negative_cache(self):
+        from odu import catalog
+        with tempfile.TemporaryDirectory() as d:
+            os.environ["ODU_DB"] = os.path.join(d, "t.db")
+            try:
+                catalog._check_ms_catalog_query = lambda q, timeout=15: []  # noqa: E731
+                try:
+                    self.assertEqual(catalog._cached_query("NOPE", 5), [])
+                    from odu import store
+                    # miss must NOT be cached
+                    con = store.connect()
+                    try:
+                        row = con.execute(
+                            "SELECT result FROM catalog_cache WHERE hwid=?",
+                            ("q:NOPE",)).fetchone()
+                    finally:
+                        con.close()
+                    self.assertIsNone(row)
+                finally:
+                    del catalog._check_ms_catalog_query
+            finally:
+                del os.environ["ODU_DB"]
+
+    def test_find_scanner_arch_order(self):
+        from odu import scanner
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "native", "bin", "x64"))
+            os.makedirs(os.path.join(d, "native", "bin", "x86"))
+            open(os.path.join(d, "native", "bin", "x64", "odu_scan.exe"), "w").close()
+            open(os.path.join(d, "native", "bin", "x86", "odu_scan.exe"), "w").close()
+            real_file, real_env = scanner.__file__, dict(os.environ)
+            try:
+                scanner.__file__ = os.path.join(d, "src", "odu", "scanner.py")
+                # this host is x64 -> x64 binary preferred
+                self.assertIn(os.path.join("bin", "x64", "odu_scan.exe"),
+                              scanner.find_scanner())
+                # simulate a 32-bit OS -> x86 binary preferred
+                os.environ.pop("PROCESSOR_ARCHITEW6432", None)
+                os.environ["PROCESSOR_ARCHITECTURE"] = "x86"
+                self.assertIn(os.path.join("bin", "x86", "odu_scan.exe"),
+                              scanner.find_scanner())
+            finally:
+                scanner.__file__ = real_file
+                os.environ.clear()
+                os.environ.update(real_env)
+
+
 if __name__ == "__main__":
     unittest.main()

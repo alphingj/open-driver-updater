@@ -5,6 +5,11 @@ using System.Windows;
 
 namespace OduApp
 {
+    public static class AppVersion
+    {
+        public const string Value = "0.2.0";
+    }
+
     public static class Program
     {
         [System.Runtime.InteropServices.DllImport("kernel32.dll")]
@@ -19,6 +24,20 @@ namespace OduApp
                 {
                     try { AllocConsole(); } catch { }
                     return SelfTest();
+                }
+                if (a == "--help" || a == "-h" || a == "/?")
+                {
+                    try { AllocConsole(); } catch { }
+                    try
+                    {
+                        System.Console.WriteLine(
+                            "Open Driver Updater\n" +
+                            "  OduApp.exe                  start the desktop UI\n" +
+                            "  OduApp.exe --selftest       headless scan+resolve check\n" +
+                            "  OduApp.exe --help           this text");
+                    }
+                    catch { }
+                    return 0;
                 }
             }
             var app = new Application();

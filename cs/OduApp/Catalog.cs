@@ -107,7 +107,10 @@ namespace OduApp
             return _http;
         }
 
-        private static string Fetch(string url, string postBody)
+        // Runs with no SynchronizationContext affinity: blocking .Result here
+        // is safe from any thread (callers must still stay off the UI thread
+        // for responsiveness — Refresh/UpdateAll use Task workers).
+        private static string FetchInner(string url, string postBody)
         {
             Task<string> t;
             if (postBody == null)
@@ -125,6 +128,15 @@ namespace OduApp
             return html.Length > 2 * 1024 * 1024 ? html.Substring(0, 2 * 1024 * 1024) : html;
         }
 
+        private static string Fetch(string url, string postBody)
+        {
+            var args = new string[] { url, postBody };
+            Task<string> outer = Task.Factory.StartNew(
+                delegate { return FetchInner(args[0], args[1]); },
+                TaskCreationOptions.LongRunning);
+            return outer.Result;
+        }
+
         public static List<CatalogHit> QueryOne(string query)
         {
             string cached = Store.CacheGet("q:" + query);
@@ -136,7 +148,12 @@ namespace OduApp
                 found = ParseSearch(html);
             }
             catch { }
-            try { Store.CachePut("q:" + query, EncodeHits(found)); } catch { }
+            // Never cache misses: a transient failure must not poison the
+            // cache for 7 days.
+            if (found.Count > 0)
+            {
+                try { Store.CachePut("q:" + query, EncodeHits(found)); } catch { }
+            }
             return found;
         }
 
@@ -155,9 +172,22 @@ namespace OduApp
 
         public static List<CatalogHit> Lookup(string hwid)
         {
-            foreach (string q in QueryCandidates(hwid))
+            // 4-way parallel like the Python resolver; order preserved so the
+            // first candidate with hits wins.
+            List<string> qs = QueryCandidates(hwid);
+            Task<List<CatalogHit>>[] tasks = new Task<List<CatalogHit>>[qs.Count];
+            for (int i = 0; i < qs.Count; i++)
             {
-                List<CatalogHit> r = QueryOne(q);
+                string q = qs[i];
+                tasks[i] = Task.Factory.StartNew(
+                    delegate { return QueryOne(q); }, TaskCreationOptions.LongRunning);
+            }
+            try { Task.WaitAll(tasks, 4 * 60 * 1000); } catch { }
+            foreach (Task<List<CatalogHit>> t in tasks)
+            {
+                List<CatalogHit> r;
+                try { r = t.IsCompleted ? t.Result : new List<CatalogHit>(); }
+                catch { r = new List<CatalogHit>(); }
                 if (r.Count > 0) return r;
             }
             return new List<CatalogHit>();
@@ -274,6 +304,15 @@ namespace OduApp
             return out_;
         }
 
+        // Surrogate-safe truncation: never split a UTF-16 pair.
+        public static string Cut(string s, int max)
+        {
+            if (string.IsNullOrEmpty(s) || s.Length <= max) return s ?? "";
+            int n = max;
+            if (char.IsHighSurrogate(s[n - 1])) n--;
+            return s.Substring(0, n);
+        }
+
         public static List<DriverUpdate> Resolve(List<Device> devices, List<string> excluded, bool live)
         {
             var out_ = new List<DriverUpdate>();
@@ -304,11 +343,11 @@ namespace OduApp
                     List<CatalogHit> hits = Lookup(hwid);
                     if (hits.Count > 0)
                     {
-                        u.AvailableVersion = hits[0].Title.Length > 64
-                            ? hits[0].Title.Substring(0, 64) : hits[0].Title;
+                        u.AvailableVersion = Cut(hits[0].Title, 64);
                         u.DownloadUrl = hits[0].Url;
                         u.Title = hits[0].Title;
                         u.UpdateId = hits[0].Id;
+                        u.Size = hits[0].Size;
                         out_.Add(u);
                         continue;
                     }

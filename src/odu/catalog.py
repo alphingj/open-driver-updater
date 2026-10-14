@@ -124,18 +124,21 @@ def _cached_query(query: str, timeout: int = 15) -> list[dict]:
         found = _check_ms_catalog_query(query, timeout)
     except Exception:
         found = []
-    try:
-        store_mod.cache_put("q:" + query, json.dumps(found))
-    except Exception:
-        pass
+    # Never cache misses: a transient failure must not poison the cache.
+    if found:
+        try:
+            store_mod.cache_put("q:" + query, json.dumps(found))
+        except Exception:
+            pass
     return found
 
 
 def check_ms_catalog(hwid: str, timeout: int = 15) -> list[dict]:
     """Best-effort live lookup of Microsoft Update Catalog (HTML, may change)."""
     for q in query_candidates(hwid):
-        if _cached_query(q, timeout):
-            return _cached_query(q, timeout)
+        found = _cached_query(q, timeout)
+        if found:
+            return found
     return []
 
 
@@ -224,6 +227,16 @@ def _needs(dev: Device) -> bool:
     return dev.problem_code != 0 or dev.status == "ERROR" or not dev.driver_version
 
 
+def _cut(s: str, n: int) -> str:
+    """Truncate without splitting a surrogate pair."""
+    s = s or ""
+    if len(s) <= n:
+        return s
+    if n > 0 and 0xD800 <= ord(s[n - 1]) <= 0xDBFF:
+        n -= 1
+    return s[:n]
+
+
 def resolve_updates(devices: list[Device], arch: str | None = None,
                     live_catalog: bool = False) -> list[DriverUpdate]:
     arch = native_arch() if arch is None else arch
@@ -251,9 +264,10 @@ def resolve_updates(devices: list[Device], arch: str | None = None,
             updates.append(DriverUpdate(
                 hwid=hwid, device_name=dev.friendly_name or dev.instance_id,
                 instance_id=dev.instance_id, installed_version=dev.driver_version,
-                available_version=f["title"][:64], source="ms-catalog",
+                available_version=_cut(f["title"], 64), source="ms-catalog",
                 download_url=f["url"], arch=arch, title=f["title"],
-                update_id=f["id"], vendor=hint["vendor"], vendor_url=hint["url"]))
+                update_id=f["id"], size=int(f.get("size") or 0),
+                vendor=hint["vendor"], vendor_url=hint["url"]))
             continue
         updates.append(DriverUpdate(
             hwid=hwid, device_name=dev.friendly_name or dev.instance_id,

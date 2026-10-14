@@ -42,7 +42,7 @@ _GUID_RE = re.compile(r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-"
 
 _JOB_LOCK = threading.Lock()
 JOB: dict = {"running": False, "total": 0, "done": 0, "current": "",
-             "results": [], "started": 0.0, "backup": None}
+             "results": [], "started": 0.0, "backup": None, "cancel": False}
 
 _SCAN_LOCK = threading.Lock()
 _SCAN_CACHE: dict = {"at": 0.0, "key": "", "body": None}
@@ -63,7 +63,7 @@ def _job_run(items: list[dict]) -> None:
     from odu import installer as installer_mod
     with _JOB_LOCK:
         JOB.update(running=True, total=len(items), done=0, current="",
-                   results=[], started=time.time(), backup=None)
+                   results=[], started=time.time(), backup=None, cancel=False)
     try:
         dest = os.path.join(os.path.expanduser("~"), "odu-backup")
         with _JOB_LOCK:
@@ -93,7 +93,8 @@ def _job_run(items: list[dict]) -> None:
             try:
                 with _JOB_LOCK:
                     JOB["current"] = f"Resolving {name}…"
-                urls = catalog_mod.get_download_urls(it.get("update_id", ""))
+                urls = catalog_mod.get_download_urls(it.get("update_id", ""),
+                                                     it.get("size", 0))
                 if not urls:
                     res["detail"] = "no CAB published for this update"
                 else:
@@ -111,13 +112,18 @@ def _job_run(items: list[dict]) -> None:
                         logs.append(str(inst.get("inf", "")) + " :: "
                                     + str(inst.get("log", ""))[-200:])
                     res["ok"] = ok_all
-                    res["detail"] = " | ".join(logs)[-300:]
+                    res["detail"] = " ||| ".join(logs)[-2000:]
             except Exception as e:  # keep going through the queue
                 res["detail"] = str(e)[-300:]
             with _JOB_LOCK:
                 JOB["results"].append(res)
                 JOB["done"] += 1
                 JOB["current"] = ""
+                if JOB.get("cancel"):
+                    JOB["results"].append({"device": "Update queue", "hwid": "",
+                                           "ok": False,
+                                           "detail": "cancelled; remaining drivers untouched"})
+                    break
     finally:
         with _JOB_LOCK:
             JOB["running"] = False
@@ -166,7 +172,9 @@ class Handler(SimpleHTTPRequestHandler):
             parsed = urllib.parse.urlparse(self.path)
             if parsed.path == "/api/health":
                 from odu import arch
+                from odu import __version__
                 return self._json({"ok": True, "arch": arch.native_arch(),
+                                   "version": __version__,
                                    "ui": os.path.isfile(os.path.join(UI_DIR, "index.html"))})
             if parsed.path == "/api/scan":
                 live = "live=1" in (parsed.query or "")
@@ -182,6 +190,10 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json(scheduler.status())
             if parsed.path == "/api/job":
                 return self._json(job_snapshot())
+            if parsed.path == "/api/cancel":
+                with _JOB_LOCK:
+                    JOB["cancel"] = True
+                return self._json({"ok": True})
             return super().do_GET()
         except (BrokenPipeError, ConnectionResetError):
             pass
