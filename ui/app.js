@@ -40,7 +40,7 @@ async function scan() {
   try {
     const j = await api('/api/scan' + live);
     state = j;
-    $('#arch').textContent = 'arch: ' + (j.arch || '?');
+    $('#arch').textContent = 'arch: ' + (j.arch || '?') + (j.cached ? ' (cached)' : '');
     render();
     checkSystem();
     checkAppUpdate();
@@ -81,6 +81,18 @@ function updateCard(u, i, review) {
     <button class="btn" data-exclude="${i}">Exclude</button>
     <button class="btn" data-skipver="${i}" title="skip only this version">Skip version</button></div></div>`;
 }
+async function updateOne(u) {
+  const rev = (u.confidence || 'high') !== 'high';
+  let msg = `Download and install now?\n${u.device_name}\n→ ${u.available_version}` + (u.is_gpu ? '\n\nWARNING: display/GPU driver — can black-screen mid-install.' : '') + (rev ? '\n\nNote: needs-review match, not auto-install grade.' : '') + '\nA restore point + backup run first. Admin rights required.';
+  if (!confirm(msg)) return;
+  if (u.is_gpu && !confirm('Confirm the GPU update a second time to proceed.')) return;
+  try {
+    await api('/api/update-one', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ update: u }) });
+  } catch (e) { $('#job-msg').textContent = 'Could not start: ' + e.message; return; }
+  $('#job-bar').classList.remove('hidden');
+  clearInterval(jobTimer);
+  jobTimer = setInterval(pollJob, 2000);
+}
 function render() {
   $('#stat-devices').textContent = state.devices.length;
   const high = state.updates.filter(u => (u.confidence || 'high') === 'high');
@@ -96,21 +108,12 @@ function render() {
   document.querySelectorAll('[data-exclude]').forEach(b => b.onclick = () => exclude(state.updates[+b.dataset.exclude].hwid));
   document.querySelectorAll('[data-skipver]').forEach(b => b.onclick = () => {
     const u = state.updates[+b.dataset.skipver];
-    exclude(u.hwid + '||' + (u.available_version || ''));
+    const key = u.hwid + '||' + (u.available_version || '');
+    exclude(key);
+    state.updates = state.updates.filter(x => (x.hwid + '||' + (x.available_version || '')) !== key && x.hwid !== u.hwid);
+    render();
   });
   document.querySelectorAll('[data-update]').forEach(b => b.onclick = () => updateOne(state.updates[+b.dataset.update]));
-async function updateOne(u) {
-  const rev = (u.confidence || 'high') !== 'high';
-  let msg = `Download and install now?\n${u.device_name}\n→ ${u.available_version}` + (u.is_gpu ? '\n\nWARNING: display/GPU driver — can black-screen mid-install.' : '') + (rev ? '\n\nNote: needs-review match, not auto-install grade.' : '') + '\nA restore point + backup run first. Admin rights required.';
-  if (!confirm(msg)) return;
-  if (u.is_gpu && !confirm('Confirm the GPU update a second time to proceed.')) return;
-  try {
-    await api('/api/update-one', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ update: u }) });
-  } catch (e) { $('#job-msg').textContent = 'Could not start: ' + e.message; return; }
-  $('#job-bar').classList.remove('hidden');
-  clearInterval(jobTimer);
-  jobTimer = setInterval(pollJob, 2000);
-}
   $('#devices').innerHTML = state.devices.map(d => `
     <div class="row-item"><div><div class="t">${esc(d.friendly_name || d.instance_id)}</div>
     <div class="s">${esc((d.hwid || []).join(' · ') || d.instance_id)} · ${esc(d.driver_version || 'no driver')} · ${esc(d.status)}</div></div>
@@ -128,7 +131,11 @@ async function loadBackups() {
 async function loadExcluded() {
   try {
     const j = await api('/api/exclusions');
-    $('#excluded').innerHTML = j.exclusions.length ? j.exclusions.map((h, i) => `<div class="row-item"><div class="s">${esc(h)}</div><button class="btn" data-unexclude="${i}">Remove</button></div>`).join('') : '<div class="card">Nothing excluded.</div>';
+    const fmt = h => {
+      const p = String(h).split('||');
+      return p.length > 1 ? esc(p[0]) + ' <span class="tag">version: ' + esc(p[1]) + '</span>' : esc(h);
+    };
+    $('#excluded').innerHTML = j.exclusions.length ? j.exclusions.map((h, i) => `<div class="row-item"><div class="s">${fmt(h)}</div><button class="btn" data-unexclude="${i}">Remove</button></div>`).join('') : '<div class="card">Nothing excluded.</div>';
     document.querySelectorAll('[data-unexclude]').forEach(b => b.onclick = () => unexclude(state._excluded[+b.dataset.unexclude]));
     state._excluded = j.exclusions;
   } catch (e) { /* leave previous list */ }
@@ -211,17 +218,26 @@ async function pollJob() {
     $('#job-fill').style.width = pct + '%';
     $('#job-msg').textContent = s.running ? `Working ${s.done}/${s.total} — ${s.current}` : (s.total ? `Done ${s.done}/${s.total}.` : '');
     const failed = (s.results || []).some(r => !r.ok);
-    $('#job-log').innerHTML = (s.results || []).map(r => `<div class="row-item"><div><div class="t">${esc(r.device)}</div><div class="s">${esc(r.detail || '')}</div></div><div class="row"><span class="tag ${r.ok ? 'good' : 'bad'}">${r.ok ? 'ok' : 'failed'}</span>${r.published ? `<button class="btn" data-rb="${esc(r.published)}">Rollback</button>` : ''}</div></div>`).join('')
+    $('#job-log').innerHTML = (s.results || []).map(r => `<div class="row-item"><div><div class="t">${esc(r.device)}</div><div class="s">${esc(r.detail || '')}</div></div><div class="row"><span class="tag ${r.ok ? 'good' : 'bad'}">${r.ok ? 'ok' : 'failed'}</span>${r.published ? `<button class="btn" data-rb="${esc(r.published)}" data-dev="${esc(r.device)}">Rollback</button>` : ''}</div></div>`).join('')
       + ((!s.running && s.total) ? `<div class="card"><b>${failed ? 'Finished with errors — review the log above.' : 'All updates installed.'} A restart may be required for drivers to take effect.</b></div>` : '');
     document.querySelectorAll('[data-rb]').forEach(b => b.onclick = async () => {
       const oem = b.dataset.rb;
-      if (!confirm('Roll back ' + oem + '? Windows will revert to the previous driver.')) return;
+      if (!confirm('Roll back ' + oem + ' (' + b.dataset.dev + ')? Windows reverts to the previous driver. If the device had no driver before, it will be left without one.')) return;
       try {
         const j = await api('/api/rollback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ published: oem }) });
         b.outerHTML = '<span class="tag ' + (j.ok ? 'good' : 'bad') + '">' + (j.ok ? 'rolled back' : 'failed') + '</span>';
       } catch (e) { b.outerHTML = '<span class="tag bad">failed</span>'; }
     });
-    if (!s.running && s.total) { clearInterval(jobTimer); scan(); }
+    if (!s.running && s.total) { clearInterval(jobTimer); scanFast(); }
+}
+async function scanFast() {
+  // After a job: quick non-live rescan (no Catalog hammering). Installed
+  // drivers now read current, so the update list settles by itself.
+  try {
+    const j = await api('/api/scan');
+    state = j;
+    render();
+  } catch (e) { /* keep old state */ }
 }
 $('#btn-report').onclick = async () => {
   try {

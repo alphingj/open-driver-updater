@@ -28,6 +28,15 @@ Microsoft Update Catalog instead of a proprietary DB:
 - strict tuple comparison; incomparable schemes stay quiet, titles shown
 - 7-day cache + parallel lookups; user reviews every match before install
 
+## Cross-language duplication (accepted)
+
+Matching logic lives in C (`odu_hw`), Python (`arch.py`/`catalog.py`) and C#
+(`ArchUtil`/`Catalog`) independently — no shared runtime. Drift is controlled
+by mirrored golden vectors in `native/odu_hw/test_hw.c`, `tests/test_core.py`
+and `cs/OduTest/OduTest.cs`. The PowerShell snippets for WU search and VC++
+detection are likewise duplicated between `src/odu/*.py` and `cs/OduApp/Ui.cs`;
+keep them in sync by hand when either changes.
+
 ## Static RE notes (no installation performed)
 
 - `db-setup.exe` (Driver Booster 14.0.1.462, 34MB):

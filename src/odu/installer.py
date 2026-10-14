@@ -11,6 +11,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 import urllib.request
 from .arch import canonical_arch, expand_path, is_inf_compatible, pnputil_path
 
@@ -25,25 +26,40 @@ def download(url: str, dest_dir: str, timeout: int = 120,
         name += ".cab"
     dest = os.path.join(dest_dir, name)
     digest = hashlib.sha256()
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as r, open(dest, "wb") as f:
+    deadline = time.time() + max(timeout, 600)
+    last_error: Exception | None = None
+    for _attempt in (1, 2):  # one automatic retry on transient network errors
+        digest = hashlib.sha256()
         try:
-            total = int(r.headers.get("Content-Length") or 0)
-        except (TypeError, ValueError):
-            total = 0
-        done = 0
-        while True:
-            chunk = r.read(1 << 20)
-            if not chunk:
-                break
-            digest.update(chunk)
-            f.write(chunk)
-            done += len(chunk)
-            if progress:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=timeout) as r, open(dest, "wb") as f:
                 try:
-                    progress(done, total)
-                except Exception:
-                    pass
+                    total = int(r.headers.get("Content-Length") or 0)
+                except (TypeError, ValueError):
+                    total = 0
+                done = 0
+                while True:
+                    if time.time() > deadline:
+                        raise TimeoutError("download exceeded overall deadline")
+                    chunk = r.read(1 << 20)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+                    f.write(chunk)
+                    done += len(chunk)
+                    if progress:
+                        try:
+                            progress(done, total)
+                        except Exception:
+                            pass
+            break
+        except ValueError:
+            raise
+        except Exception as e:
+            last_error = e
+            continue
+    else:
+        raise last_error or OSError("download failed")
     if expected_sha256_b64:
         try:
             expected = base64.b64decode(expected_sha256_b64)
@@ -110,6 +126,10 @@ def _published_name(log: str) -> str:
     """Parse 'Published name : oemNN.inf' for later rollback."""
     import re
     m = re.search(r"Published name\s*:\s*(oem\d+\.inf)", log, re.I)
+    if m:
+        return m.group(1).lower()
+    # Non-English pnputil localizes the label: fall back to any oemNN token.
+    m = re.search(r"\b(oem\d+\.inf)\b", log, re.I)
     return m.group(1).lower() if m else ""
 
 

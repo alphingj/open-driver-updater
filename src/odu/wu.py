@@ -8,7 +8,7 @@ import json
 import subprocess
 
 _PS_SEARCH = r"""
-$ s = New-Object -ComObject Microsoft.Update.Session
+$s = New-Object -ComObject Microsoft.Update.Session
 $sr = $s.CreateUpdateSearcher()
 $r = $sr.Search("IsInstalled=0 and IsHidden=0 and Type='Driver'")
 $out = @()
@@ -44,7 +44,10 @@ def search(timeout: int = 300) -> list[dict]:
     out = []
     for d in data if isinstance(data, list) else []:
         if isinstance(d, dict) and d.get("Title"):
-            out.append({"title": str(d["Title"]), "kb": str(d.get("KB") or ""),
+            kb = d.get("KB") or ""
+            if isinstance(kb, list):
+                kb = ",".join(str(x) for x in kb)
+            out.append({"title": str(d["Title"]), "kb": str(kb),
                         "reboot": bool(d.get("Reboot")),
                         "size": int(d.get("Size") or 0)})
     return out

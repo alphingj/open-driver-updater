@@ -242,5 +242,79 @@ class SearchUrlTest(unittest.TestCase):
                 os.environ.update(real_env)
 
 
+class SafetyTest(unittest.TestCase):
+    def test_reboot_empty_value_ignored(self):
+        import sys as _sys
+        from odu import safety
+        real = _sys.modules.get("winreg")
+
+        class FakeKey:
+            def __init__(self, values):
+                self.values = values
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        class FakeWinreg:
+            def __init__(self, values):
+                self.values = values
+            def OpenKey(self, hive, path, *a, **k):
+                if path in self.values:
+                    return FakeKey(self.values)
+                raise OSError("no key")
+            def QueryValueEx(self, k, name):
+                if name in self.values.get("K", {}):
+                    return self.values["K"][name], 1
+                raise OSError("no value")
+
+        # empty PendingFileRenameOperations must NOT report a reboot
+        _sys.modules["winreg"] = FakeWinreg(
+            {"K": {"PendingFileRenameOperations": []}})
+        real_keys = safety._REBOOT_KEYS
+        safety._REBOOT_KEYS = [("K", "PendingFileRenameOperations")]
+        try:
+            self.assertEqual(safety.reboot_pending(),
+                             {"pending": False, "reasons": []})
+            _sys.modules["winreg"] = FakeWinreg(
+                {"K": {"PendingFileRenameOperations": ["a", "b"]}})
+            r = safety.reboot_pending()
+            self.assertTrue(r["pending"])
+        finally:
+            safety._REBOOT_KEYS = real_keys
+            if real is None:
+                del _sys.modules["winreg"]
+            else:
+                _sys.modules["winreg"] = real
+
+    def test_published_name_localized(self):
+        from odu.installer import _published_name, rollback_driver
+        self.assertEqual(_published_name("Published name : OEM12.INF"), "oem12.inf")
+        self.assertEqual(_published_name("succeeded ... oem7.inf ..."), "oem7.inf")
+        self.assertEqual(_published_name("nothing here"), "")
+        self.assertFalse(rollback_driver("../../evil")[ "ok"])
+        self.assertFalse(rollback_driver("oem12.inf.bak")["ok"])
+
+    def test_vc_recency(self):
+        from odu.components import _has_current_vc
+        self.assertTrue(_has_current_vc(
+            ["Microsoft Visual C++ 2015-2022 Redistributable (x64) - 14.42"]))
+        self.assertFalse(_has_current_vc(
+            ["Microsoft Visual C++ 2010  x64 Redistributable - 10.0.40219"]))
+        self.assertFalse(_has_current_vc([]))
+
+    def test_wu_search_parsing(self):
+        from odu import wu
+        real = wu._run
+        wu._run = lambda ps, timeout=300: (
+            '{"Title":"D1","KB":[111],"Reboot":false,"Size":10}')
+        try:
+            r = wu.search()
+            self.assertEqual(len(r), 1)
+            self.assertEqual(r[0]["kb"], "111")
+        finally:
+            wu._run = real
+
+
 if __name__ == "__main__":
     unittest.main()

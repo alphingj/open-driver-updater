@@ -53,7 +53,8 @@ def job_snapshot() -> dict:
     with _JOB_LOCK:
         return {"running": JOB["running"], "total": JOB["total"], "done": JOB["done"],
                 "current": JOB["current"], "results": list(JOB["results"]),
-                "started": JOB["started"], "backup": JOB["backup"]}
+                "started": JOB["started"], "backup": JOB["backup"],
+                "restore": JOB.get("restore")}
 
 
 def _dl_progress(name: str, done: int, total: int) -> None:
@@ -72,7 +73,7 @@ def _job_run(items: list[dict]) -> None:
     from odu import installer as installer_mod
     from odu import safety as safety_mod
     with _JOB_LOCK:
-        JOB.update(running=True, total=len(items), done=0, current="",
+        JOB.update(running=True, total=len(items) + 2, done=0, current="",
                    results=[], started=time.time(), backup=None, cancel=False,
                    restore=None)
     try:
@@ -81,6 +82,7 @@ def _job_run(items: list[dict]) -> None:
         restore_res = safety_mod.create_restore_point()
         with _JOB_LOCK:
             JOB["restore"] = restore_res
+            JOB["done"] += 1
             JOB["results"].append({"device": "System restore point",
                                    "hwid": "",
                                    "ok": bool(restore_res.get("ok")),
@@ -91,6 +93,7 @@ def _job_run(items: list[dict]) -> None:
         backup_res = backup_mod.backup_all(dest)
         with _JOB_LOCK:
             JOB["backup"] = backup_res
+            JOB["done"] += 1
             JOB["results"].append({"device": "Pre-update backup",
                                    "hwid": "",
                                    "ok": bool(backup_res.get("ok")),
@@ -184,12 +187,14 @@ class Handler(SimpleHTTPRequestHandler):
         with _SCAN_LOCK:
             if _SCAN_CACHE["body"] is not None and _SCAN_CACHE["key"] == key \
                     and now - _SCAN_CACHE["at"] < SCAN_TTL:
-                return _SCAN_CACHE["body"]
+                body = dict(_SCAN_CACHE["body"])
+                body["cached"] = True
+                return body
         devs = scanner.scan()
         ups = catalog.resolve_updates(devs, arch.native_arch(), live_catalog=live)
         body = {"devices": [d.to_dict() for d in devs],
                 "updates": [u.to_dict() for u in ups],
-                "arch": arch.native_arch()}
+                "arch": arch.native_arch(), "cached": False}
         with _SCAN_LOCK:
             _SCAN_CACHE.update(at=now, key=key, body=body)
         return body

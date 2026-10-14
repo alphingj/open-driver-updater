@@ -124,33 +124,18 @@ namespace OduApp
         {
             try
             {
-                using (var wc = new System.Net.WebClient())
+                Exception last = null;
+                for (int attempt = 0; attempt < 2; attempt++) // one retry
                 {
-                    wc.Headers.Add("User-Agent", "Mozilla/5.0");
-                    if (percent != null)
+                    try
                     {
-                        var done = new System.Threading.ManualResetEvent(false);
-                        Exception err = null;
-                        wc.DownloadProgressChanged += delegate(object s,
-                            System.Net.DownloadProgressChangedEventArgs e)
-                        {
-                            try { percent(e.ProgressPercentage); } catch { }
-                        };
-                        wc.DownloadFileCompleted += delegate(object s,
-                            System.ComponentModel.AsyncCompletedEventArgs e)
-                        {
-                            if (e.Error != null) err = e.Error;
-                            done.Set();
-                        };
-                        wc.DownloadFileAsync(new Uri(url), dest);
-                        done.WaitOne();
-                        if (err != null) throw err;
+                        DownloadOnce(url, dest, percent);
+                        last = null;
+                        break;
                     }
-                    else
-                    {
-                        wc.DownloadFile(url, dest);
-                    }
+                    catch (Exception e) { last = e; }
                 }
+                if (last != null) throw last;
                 if (!string.IsNullOrEmpty(shaB64))
                 {
                     byte[] expect;
@@ -171,6 +156,42 @@ namespace OduApp
                 return true;
             }
             catch { try { File.Delete(dest); } catch { } return false; }
+        }
+
+        private static void DownloadOnce(string url, string dest, Action<int> percent)
+        {
+            using (var wc = new System.Net.WebClient())
+            {
+                wc.Headers.Add("User-Agent", "Mozilla/5.0");
+                    if (percent != null)
+                    {
+                        var done = new System.Threading.ManualResetEvent(false);
+                        Exception err = null;
+                        wc.DownloadProgressChanged += delegate(object s,
+                            System.Net.DownloadProgressChangedEventArgs e)
+                        {
+                            try { percent(e.ProgressPercentage); } catch { }
+                        };
+                        wc.DownloadFileCompleted += delegate(object s,
+                            System.ComponentModel.AsyncCompletedEventArgs e)
+                        {
+                            if (e.Error != null) err = e.Error;
+                            done.Set();
+                        };
+                        wc.DownloadFileAsync(new Uri(url), dest);
+                        // Async WebClient ignores Timeout: bound the wait ourselves.
+                        if (!done.WaitOne(30 * 60 * 1000))
+                        {
+                            try { wc.CancelAsync(); } catch { }
+                            throw new TimeoutException("download stalled");
+                        }
+                        if (err != null) throw err;
+                    }
+                    else
+                    {
+                        wc.DownloadFile(url, dest);
+                    }
+            }
         }
 
         public static OpResult Sched(string args)

@@ -272,7 +272,10 @@ namespace OduApp
             foreach (DriverUpdate u in _updates)
             {
                 bool isRev = (u.Confidence ?? "high") != "high";
-                if (isRev != review || u.UpdateId == "") continue;
+                // Manual entries (no Catalog GUID) show under Ready like the
+                // web UI; they carry no Update button, only Get/Exclude links.
+                if (isRev != review) continue;
+                if (review && u.UpdateId == "") continue;
                 n++;
                 var c = Card();
                 var sp = new StackPanel { Orientation = Orientation.Horizontal };
@@ -287,7 +290,8 @@ namespace OduApp
                 });
                 tx.Children.Add(new TextBlock
                 {
-                    Text = u.HwId + " · installed: " + (u.InstalledVersion != "" ? u.InstalledVersion : "none"),
+                    Text = u.HwId + " · installed: " + (u.InstalledVersion != "" ? u.InstalledVersion : "none") +
+                           " · Catalog WHQL feed, SHA-256 verified on download",
                     Foreground = new SolidColorBrush(Pal.Muted()), FontSize = 11, TextWrapping = TextWrapping.Wrap
                 });
                 var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
