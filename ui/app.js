@@ -75,6 +75,7 @@ function updateCard(u, i, review) {
     <div class="t-sub">${u.update_id ? esc(u.device_name) : ''}</div>
     <div class="s">${esc(u.hwid)} · installed: ${esc(u.installed_version || 'none')} · ${esc(u.arch)}</div></div>
     <div class="row"><span class="tag ${u.update_id ? 'good' : 'bad'}">${u.update_id ? (review ? 'review' : 'ready') : 'manual'}</span>${gpu}${sig}
+    ${u.update_id ? `<button class="btn primary" data-update="${i}">Update</button>` : ''}
     <a class="link" href="${esc(u.download_url)}" target="_blank" rel="noreferrer">Get driver ↗</a>
     ${u.vendor_url ? `<a class="link" href="${esc(u.vendor_url)}" target="_blank" rel="noreferrer">${esc(u.vendor)} ↗</a>` : ''}
     <button class="btn" data-exclude="${i}">Exclude</button>
@@ -97,6 +98,19 @@ function render() {
     const u = state.updates[+b.dataset.skipver];
     exclude(u.hwid + '||' + (u.available_version || ''));
   });
+  document.querySelectorAll('[data-update]').forEach(b => b.onclick = () => updateOne(state.updates[+b.dataset.update]));
+async function updateOne(u) {
+  const rev = (u.confidence || 'high') !== 'high';
+  let msg = `Download and install now?\n${u.device_name}\n→ ${u.available_version}` + (u.is_gpu ? '\n\nWARNING: display/GPU driver — can black-screen mid-install.' : '') + (rev ? '\n\nNote: needs-review match, not auto-install grade.' : '') + '\nA restore point + backup run first. Admin rights required.';
+  if (!confirm(msg)) return;
+  if (u.is_gpu && !confirm('Confirm the GPU update a second time to proceed.')) return;
+  try {
+    await api('/api/update-one', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ update: u }) });
+  } catch (e) { $('#job-msg').textContent = 'Could not start: ' + e.message; return; }
+  $('#job-bar').classList.remove('hidden');
+  clearInterval(jobTimer);
+  jobTimer = setInterval(pollJob, 2000);
+}
   $('#devices').innerHTML = state.devices.map(d => `
     <div class="row-item"><div><div class="t">${esc(d.friendly_name || d.instance_id)}</div>
     <div class="s">${esc((d.hwid || []).join(' · ') || d.instance_id)} · ${esc(d.driver_version || 'no driver')} · ${esc(d.status)}</div></div>

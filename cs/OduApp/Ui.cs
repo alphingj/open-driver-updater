@@ -308,6 +308,13 @@ namespace OduApp
                 string hw = u.HwId;
                 ex.Click += delegate { Store.AddExclusion(hw); Refresh(_live); };
                 row.Children.Add(ex);
+                if (u.UpdateId != "")
+                {
+                    var one = new Button { Content = "Update", Margin = new Thickness(8, 0, 0, 0) };
+                    DriverUpdate uu = u;
+                    one.Click += delegate { UpdateOne(uu); };
+                    row.Children.Add(one);
+                }
                 var sv = new Button { Content = "Skip version", Margin = new Thickness(8, 0, 0, 0) };
                 string hwv = u.HwId, avv = u.AvailableVersion;
                 sv.Click += delegate { Store.AddExclusion(hwv + "||" + avv); Refresh(_live); };
@@ -652,6 +659,29 @@ namespace OduApp
                     return;
                 }
             }
+            RunList(live);
+        }
+
+        // One click: download + install exactly this driver (restore point +
+        // backup run first, same as bulk). Review matches allowed with notice.
+        private void UpdateOne(DriverUpdate u)
+        {
+            var one = new List<DriverUpdate>();
+            one.Add(u);
+            string msg = "Download and install now?\n" + u.DeviceName + "\n→ " + u.AvailableVersion
+                + (u.IsGpu ? "\n\nWARNING: display/GPU driver — can black-screen mid-install." : "")
+                + (((u.Confidence ?? "high") != "high") ? "\n\nNote: needs-review match, not auto-install grade." : "")
+                + "\nA restore point + backup run first. Admin rights required.";
+            if (MessageBox.Show(msg, "Open Driver Updater", MessageBoxButton.YesNo) != MessageBoxResult.Yes)
+                return;
+            if (u.IsGpu && MessageBox.Show("Confirm the GPU update a second time to proceed.",
+                    "Open Driver Updater", MessageBoxButton.YesNo) != MessageBoxResult.Yes)
+                return;
+            RunList(one);
+        }
+
+        private void RunList(List<DriverUpdate> live)
+        {
             int gpus = 0;
             foreach (DriverUpdate u in live) if (u.IsGpu) gpus++;
             string msg = "Install " + live.Count + " driver updates? A restore point + backup run first. Admin rights required.";

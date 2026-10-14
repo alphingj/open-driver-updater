@@ -294,6 +294,17 @@ class Handler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/rollback":
             from odu import installer as installer_mod
             return self._json(installer_mod.rollback_driver(str(data.get("published", ""))))
+        if parsed.path == "/api/update-one":
+            with _JOB_LOCK:
+                running = JOB["running"]
+            if running:
+                return self._json({"ok": False, "error": "a job is already running"}, 409)
+            u = data.get("update") or {}
+            if not (isinstance(u, dict) and _GUID_RE.match(str(u.get("update_id", "")))):
+                return self._json({"ok": False,
+                                    "error": "needs a live Catalog update"}, 400)
+            threading.Thread(target=_job_run, args=([u],), daemon=True).start()
+            return self._json({"ok": True, "total": 1})
         if parsed.path == "/api/wu-install":
             from odu import wu
             titles = data.get("titles") or []
