@@ -119,14 +119,37 @@ namespace OduApp
             finally { try { Directory.Delete(dir, true); } catch { } }
         }
 
-        public static bool Download(string url, string dest, string shaB64)
+        public static bool Download(string url, string dest, string shaB64,
+                                      Action<int> percent)
         {
             try
             {
                 using (var wc = new System.Net.WebClient())
                 {
                     wc.Headers.Add("User-Agent", "Mozilla/5.0");
-                    wc.DownloadFile(url, dest);
+                    if (percent != null)
+                    {
+                        var done = new System.Threading.ManualResetEvent(false);
+                        Exception err = null;
+                        wc.DownloadProgressChanged += delegate(object s,
+                            System.Net.DownloadProgressChangedEventArgs e)
+                        {
+                            try { percent(e.ProgressPercentage); } catch { }
+                        };
+                        wc.DownloadFileCompleted += delegate(object s,
+                            System.ComponentModel.AsyncCompletedEventArgs e)
+                        {
+                            if (e.Error != null) err = e.Error;
+                            done.Set();
+                        };
+                        wc.DownloadFileAsync(new Uri(url), dest);
+                        done.WaitOne();
+                        if (err != null) throw err;
+                    }
+                    else
+                    {
+                        wc.DownloadFile(url, dest);
+                    }
                 }
                 if (!string.IsNullOrEmpty(shaB64))
                 {
@@ -169,6 +192,68 @@ namespace OduApp
         public static OpResult SchedStatus()
         {
             return Sched("/Query /TN OpenDriverUpdaterScan");
+        }
+
+        public static OpResult RestorePoint()
+        {
+            return Run("powershell.exe",
+                "-NoProfile -Command \"Try { Checkpoint-Computer " +
+                "-Description 'Open Driver Updater' -RestorePointType 'MODIFY_SETTINGS' " +
+                "-ErrorAction Stop; 'OK' } Catch { 'FAIL: ' + $_.Exception.Message }\"",
+                5 * 60 * 1000);
+        }
+
+        public static bool RebootPending(out string reasons)
+        {
+            reasons = "";
+            try
+            {
+                string[] checks = new string[]
+                {
+                    @"SYSTEM\CurrentControlSet\Control\Session Manager|PendingFileRenameOperations",
+                    @"SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing|RebootPending",
+                    @"SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update|RebootRequired"
+                };
+                foreach (string c in checks)
+                {
+                    int bar = c.IndexOf('|');
+                    string key = c.Substring(0, bar);
+                    string val = c.Substring(bar + 1);
+                    using (Microsoft.Win32.RegistryKey k =
+                        Microsoft.Win32.Registry.LocalMachine.OpenSubKey(key))
+                    {
+                        if (k != null && k.GetValue(val) != null)
+                        {
+                            reasons += (reasons == "" ? "" : ", ") + val;
+                        }
+                    }
+                }
+            }
+            catch { }
+            return reasons != "";
+        }
+
+        public static OpResult RollbackDriver(string published)
+        {
+            var r = new OpResult();
+            string oem = (published ?? "").Trim().ToLowerInvariant();
+            if (!System.Text.RegularExpressions.Regex.IsMatch(oem, "^oem\\d+\\.inf$"))
+            {
+                r.Ok = false;
+                r.Log = "refusing: not a recorded oem name";
+                return r;
+            }
+            return Run(ArchUtil.Tool("pnputil.exe"), "/delete-driver " + oem + " /uninstall",
+                       10 * 60 * 1000);
+        }
+
+        public static string PublishedName(string log)
+        {
+            System.Text.RegularExpressions.Match m =
+                System.Text.RegularExpressions.Regex.Match(log ?? "",
+                    "Published name\\s*:\\s*(oem\\d+\\.inf)",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            return m.Success ? m.Groups[1].Value.ToLowerInvariant() : "";
         }
 
         public static string ScanCommand()

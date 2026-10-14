@@ -396,6 +396,29 @@ namespace OduApp
             return false;
         }
 
+        private static string NormDate(string s)
+        {
+            Match m = Regex.Match(s ?? "", "(\\d{4})\\D?(\\d{2})\\D?(\\d{2})");
+            return m.Success ? m.Groups[1].Value + m.Groups[2].Value + m.Groups[3].Value : "";
+        }
+
+        // Second opinion for incomparable schemes: "yes" / "review" / "no".
+        // "review" items are shown separately and never auto-installed.
+        public static string FuzzyNewer(string title, string installedVersion,
+                                       string installedDate)
+        {
+            int[] aver = CatalogVersion(title);
+            if (aver.Length > 0 && installedVersion != "" && !IsNewer(aver, installedVersion))
+            {
+                string td = NormDate(title);
+                string id = NormDate(installedDate);
+                if (td != "" && id != "" && string.Compare(td, id) > 0) return "review";
+                return "no";
+            }
+            if (aver.Length > 0) return IsNewer(aver, installedVersion) ? "yes" : "no";
+            return installedVersion != "" ? "review" : "yes";
+        }
+
         public static List<DriverUpdate> Resolve(List<Device> devices, List<string> excluded, bool live)
         {
             string arch = ArchUtil.NativeArch();
@@ -466,13 +489,16 @@ namespace OduApp
                         if (!SpecificQuery(wq) && !TitleMatchesDevice(found[0].Title, d))
                             continue; // generic-query hit for unrelated hardware
                         int[] aver = CatalogVersion(found[0].Title);
-                        if (d.DriverVersion != "" && !IsNewer(aver, d.DriverVersion))
-                            continue; // installed is current (or schemes incomparable)
+                        string verdict = FuzzyNewer(found[0].Title, d.DriverVersion, d.DriverDate);
+                        if (verdict == "no")
+                            continue; // installed is current
                         u.AvailableVersion = Cut(found[0].Title, 64);
                         u.DownloadUrl = found[0].Url;
                         u.Title = found[0].Title;
                         u.UpdateId = found[0].Id;
                         u.Size = found[0].Size;
+                        u.Confidence = verdict;
+                        u.IsGpu = string.Compare(d.DevClass ?? "", "display", true) == 0;
                         out_.Add(u);
                         continue;
                     }
@@ -489,6 +515,8 @@ namespace OduApp
                 u.Title = u.DeviceName + " — search Microsoft Update Catalog"
                     + (vendor != "" ? " (" + vendor + ")" : "");
                 u.UpdateId = "";
+                u.Confidence = "high";
+                u.IsGpu = string.Compare(d.DevClass ?? "", "display", true) == 0;
                 out_.Add(u);
             }
             return out_;

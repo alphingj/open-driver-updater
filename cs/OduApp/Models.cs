@@ -43,6 +43,8 @@ namespace OduApp
         public string Title;
         public string UpdateId;
         public long Size;
+        public string Confidence;
+        public bool IsGpu;
         public string Vendor;
         public string VendorUrl;
     }
@@ -53,5 +55,6 @@ namespace OduApp
         public string HwId;
         public bool Ok;
         public string Detail;
+        public string Published;
     }
 }

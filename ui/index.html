@@ -17,6 +17,8 @@
       <button data-view="backup">Backup</button>
       <button data-view="schedule">Schedule</button>
       <button data-view="excluded">Excluded</button>
+      <button data-view="components">Components</button>
+      <button data-view="wu">Win Update</button>
     </nav>
     <div class="side-foot"><span id="arch" class="mono">…</span><span class="dot"></span><span>Drivers via MS Catalog</span></div>
   </aside>
@@ -40,14 +42,18 @@
       </div>
     </section>
     <section id="view-updates" class="view hidden">
-      <div class="card updateall"><div><h3>One-click update</h3><p class="muted">Backs up drivers, then downloads + installs every live Catalog update.</p></div>
-      <div class="row"><button id="btn-update-all" class="btn primary">Update all</button><button id="btn-stop" class="btn">Stop</button><span id="job-msg" class="muted"></span></div>
+      <div id="reboot-banner"></div>
+      <div class="card updateall"><div><h3>One-click update</h3><p class="muted">Backs up drivers, then downloads + installs every high-confidence Catalog update. Review items are never auto-installed. GPU updates ask twice.</p></div>
+      <div class="row"><button id="btn-update-all" class="btn primary">Update all</button><button id="btn-update-sel" class="btn">Update selected</button><button id="btn-stop" class="btn">Stop</button><button id="btn-report" class="btn">Export report</button><span id="job-msg" class="muted"></span></div>
       <div id="job-bar" class="bar hidden"><div id="job-fill"></div></div><div id="job-log" class="list"></div></div>
-      <div id="updates" class="list"></div></section>
+      <h3>Ready (<span id="n-high">0</span>)</h3><div id="updates" class="list"></div>
+      <h3>Needs review (<span id="n-review">0</span>)</h3><div id="reviews" class="list"></div></section>
     <section id="view-devices" class="view hidden"><div id="devices" class="list"></div></section>
     <section id="view-backup" class="view hidden">
       <div class="card"><h3>Driver backup</h3><p class="muted">Exports all third-party drivers with pnputil. Restore from Device Manager → Have Disk.</p>
       <div class="row"><button id="btn-backup" class="btn primary">Back up now</button><span id="backup-msg" class="muted"></span></div></div>
+      <div class="card"><h3>Install from folder (offline)</h3><p class="muted">Point at a folder of INF files (e.g. a driver pack) or a .cab file.</p>
+      <div class="row"><input id="folder-path" class="input" placeholder="C:\drivers\mypack"><button id="btn-folder" class="btn">Install</button><span id="folder-msg" class="muted"></span></div></div>
       <div id="backups" class="list"></div>
     </section>
     <section id="view-schedule" class="view hidden">
@@ -55,6 +61,16 @@
       <div class="row"><button id="btn-sched-on" class="btn primary">Enable weekly</button><button id="btn-sched-off" class="btn">Disable</button><span id="sched-msg" class="muted"></span></div></div>
     </section>
     <section id="view-excluded" class="view hidden"><div id="excluded" class="list"></div></section>
+    <section id="view-components" class="view hidden">
+      <div class="card"><h3>Game & runtime components</h3><p class="muted">VC++ redistributables and DirectX that games need, with official Microsoft links.</p>
+      <div class="row"><button id="btn-comp" class="btn primary">Check</button></div></div>
+      <div id="components" class="list"></div>
+    </section>
+    <section id="view-wu" class="view hidden">
+      <div class="card"><h3>Windows Update drivers</h3><p class="muted">Driver updates offered by Windows Update itself. Installing needs elevation.</p>
+      <div class="row"><button id="btn-wu" class="btn primary">Check</button><button id="btn-wu-install" class="btn">Install selected</button><span id="wu-msg" class="muted"></span></div></div>
+      <div id="wu-list" class="list"></div>
+    </section>
   </main>
 </div>
 <script src="app.js"></script>

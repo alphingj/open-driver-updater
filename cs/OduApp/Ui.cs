@@ -66,7 +66,7 @@ namespace OduApp
 
             var side = new StackPanel { Background = new SolidColorBrush(Pal.Side()) };
             side.Children.Add(Brand());
-            string[] views = new string[] { "Overview", "Updates", "Devices", "Backup", "Schedule", "Excluded" };
+            string[] views = new string[] { "Overview", "Updates", "Devices", "Backup", "Schedule", "Excluded", "Components", "Win Update" };
             foreach (string v in views)
             {
                 var b = NavButton(v);
@@ -197,6 +197,8 @@ namespace OduApp
             else if (view == "Devices") ShowDevices();
             else if (view == "Backup") ShowBackup();
             else if (view == "Schedule") ShowSchedule();
+            else if (view == "Components") ShowComponents();
+            else if (view == "Win Update") ShowWinUpdate();
             else ShowExcluded();
         }
 
@@ -239,42 +241,58 @@ namespace OduApp
             var bar = Card();
             var bsp = new StackPanel { Orientation = Orientation.Horizontal };
             var all = BlueButton("Update all");
-            all.Click += delegate { UpdateAll(); };
+            all.Click += delegate { UpdateSel(false); };
             bsp.Children.Add(all);
+            var sel = new Button { Content = "Update selected", Margin = new Thickness(8, 0, 0, 0) };
+            sel.Click += delegate { UpdateSel(true); };
+            bsp.Children.Add(sel);
             var stop = new Button { Content = "Stop", Margin = new Thickness(8, 0, 0, 0) };
             stop.Click += delegate { Updater.Cancel(); SetStatus("Cancelling after the current driver…"); };
             bsp.Children.Add(stop);
+            var rep = new Button { Content = "Export report", Margin = new Thickness(8, 0, 0, 0) };
+            rep.Click += delegate { ExportReport(); };
+            bsp.Children.Add(rep);
             bsp.Children.Add(new TextBlock
             {
-                Text = "Backs up first, then downloads + installs every live update.",
+                Text = "Backs up first. Review items are manual-only. GPU updates ask twice.",
                 Foreground = new SolidColorBrush(Pal.Muted()), VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(12, 0, 0, 0), TextWrapping = TextWrapping.Wrap
             });
             bar.Child = bsp;
             _content.Children.Add(bar);
-            if (_updates.Count == 0)
-            {
-                var c = Card();
-                c.Child = new TextBlock { Text = "All clear — no problem devices found.", Foreground = new SolidColorBrush(Pal.Ink()) };
-                _content.Children.Add(c);
-                return;
-            }
+            AddUpdateList("Ready", false);
+            AddUpdateList("Needs review (manual install only)", true);
+        }
+
+        private void AddUpdateList(string header, bool review)
+        {
+            var h = new TextBlock { Text = header, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 6, 0, 6), Foreground = new SolidColorBrush(Pal.Ink()) };
+            _content.Children.Add(h);
+            int n = 0;
             foreach (DriverUpdate u in _updates)
             {
+                bool isRev = (u.Confidence ?? "high") != "high";
+                if (isRev != review || u.UpdateId == "") continue;
+                n++;
                 var c = Card();
-                var sp = new StackPanel();
-                sp.Children.Add(new TextBlock
+                var sp = new StackPanel { Orientation = Orientation.Horizontal };
+                var cb = new CheckBox { VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 0, 8, 0), Tag = u };
+                cb.IsChecked = !review;
+                sp.Children.Add(cb);
+                var tx = new StackPanel();
+                tx.Children.Add(new TextBlock
                 {
-                    Text = u.UpdateId != "" ? u.Title : u.DeviceName,
-                    FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap,
-                    Foreground = new SolidColorBrush(Pal.Ink())
+                    Text = u.Title, FontWeight = FontWeights.SemiBold,
+                    TextWrapping = TextWrapping.Wrap, Foreground = new SolidColorBrush(Pal.Ink())
                 });
-                sp.Children.Add(new TextBlock
+                tx.Children.Add(new TextBlock
                 {
                     Text = u.HwId + " · installed: " + (u.InstalledVersion != "" ? u.InstalledVersion : "none"),
                     Foreground = new SolidColorBrush(Pal.Muted()), FontSize = 11, TextWrapping = TextWrapping.Wrap
                 });
                 var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
+                if (u.IsGpu)
+                    row.Children.Add(new TextBlock { Text = "GPU · confirm twice", Foreground = new SolidColorBrush(Pal.Muted()), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
                 var link = new Button { Content = "Get driver ↗", Margin = new Thickness(0, 0, 8, 0) };
                 string url = u.DownloadUrl;
                 link.Click += delegate { try { Process.Start(url); } catch { } };
@@ -290,8 +308,23 @@ namespace OduApp
                 string hw = u.HwId;
                 ex.Click += delegate { Store.AddExclusion(hw); Refresh(_live); };
                 row.Children.Add(ex);
-                sp.Children.Add(row);
+                var sv = new Button { Content = "Skip version", Margin = new Thickness(8, 0, 0, 0) };
+                string hwv = u.HwId, avv = u.AvailableVersion;
+                sv.Click += delegate { Store.AddExclusion(hwv + "||" + avv); Refresh(_live); };
+                row.Children.Add(sv);
+                tx.Children.Add(row);
+                sp.Children.Add(tx);
                 c.Child = sp;
+                _content.Children.Add(c);
+            }
+            if (n == 0)
+            {
+                var c = Card();
+                c.Child = new TextBlock
+                {
+                    Text = review ? "Nothing needs a human look." : "All clear — no problem devices found.",
+                    Foreground = new SolidColorBrush(Pal.Ink())
+                };
                 _content.Children.Add(c);
             }
         }
@@ -442,6 +475,104 @@ namespace OduApp
 
         private void SetStatus(string s) { _status.Text = s; }
 
+        private void ShowComponents()
+        {
+            var c = Card();
+            var sp = new StackPanel();
+            sp.Children.Add(new TextBlock { Text = "Game & runtime components", FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(Pal.Ink()) });
+            sp.Children.Add(new TextBlock
+            {
+                Text = "VC++ redistributables and DirectX from official Microsoft links. Checks the local registry only.",
+                Foreground = new SolidColorBrush(Pal.Muted()), TextWrapping = TextWrapping.Wrap
+            });
+            c.Child = sp;
+            _content.Children.Add(c);
+            Task.Factory.StartNew(delegate
+            {
+                var items = new System.Collections.Generic.List<string[]>();
+                try
+                {
+                    using (var ps = new System.Diagnostics.Process())
+                    {
+                        ps.StartInfo.FileName = "powershell.exe";
+                        ps.StartInfo.Arguments = "-NoProfile -Command \"Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'Microsoft Visual C++*Redistributable*' } | Select-Object -ExpandProperty DisplayName\"";
+                        ps.StartInfo.UseShellExecute = false;
+                        ps.StartInfo.RedirectStandardOutput = true;
+                        ps.StartInfo.CreateNoWindow = true;
+                        ps.Start();
+                        string vc = ps.StandardOutput.ReadToEnd();
+                        ps.WaitForExit(60000);
+                        items.Add(new string[] { "Visual C++ Redistributable",
+                            (vc.Trim() != "" ? "installed" : "missing") + " — " + "https://aka.ms/vs/17/release/vc_redist.x64.exe" });
+                    }
+                }
+                catch { }
+                bool dx = System.IO.File.Exists(System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.System), "D3DCompiler_47.dll"));
+                items.Add(new string[] { "DirectX runtime",
+                    (dx ? "present" : "missing") + " — https://www.microsoft.com/en-us/download/details.aspx?id=35" });
+                Dispatcher.Invoke(new Action(delegate
+                {
+                    foreach (string[] it in items)
+                    {
+                        var e = Card();
+                        e.Child = new TextBlock { Text = it[0] + ": " + it[1], TextWrapping = TextWrapping.Wrap, Foreground = new SolidColorBrush(Pal.Ink()) };
+                        _content.Children.Add(e);
+                    }
+                }));
+            });
+        }
+
+        private void ShowWinUpdate()
+        {
+            var c = Card();
+            var sp = new StackPanel();
+            sp.Children.Add(new TextBlock { Text = "Windows Update drivers", FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(Pal.Ink()) });
+            sp.Children.Add(new TextBlock
+            {
+                Text = "Driver updates offered by Windows Update itself (same engine as the Python service).",
+                Foreground = new SolidColorBrush(Pal.Muted()), TextWrapping = TextWrapping.Wrap
+            });
+            var b = BlueButton("Check now");
+            b.Margin = new Thickness(0, 8, 0, 0);
+            b.Click += delegate
+            {
+                SetStatus("Asking Windows Update (can take minutes)…");
+                Task.Factory.StartNew(delegate
+                {
+                    string log = WinUpdateSearch();
+                    Dispatcher.Invoke(new Action(delegate { SetStatus(log); }));
+                });
+            };
+            sp.Children.Add(b);
+            c.Child = sp;
+            _content.Children.Add(c);
+        }
+
+        private string WinUpdateSearch()
+        {
+            try
+            {
+                using (var ps = new System.Diagnostics.Process())
+                {
+                    ps.StartInfo.FileName = "powershell.exe";
+                    ps.StartInfo.Arguments = "-NoProfile -Command \"$s = New-Object -ComObject Microsoft.Update.Session; $r = $s.CreateUpdateSearcher().Search(\"IsInstalled=0 and IsHidden=0 and Type='Driver'\"); 'COUNT:' + $r.Updates.Count; foreach ($u in $r.Updates) { $u.Title }\"";
+                    ps.StartInfo.UseShellExecute = false;
+                    ps.StartInfo.RedirectStandardOutput = true;
+                    ps.StartInfo.CreateNoWindow = true;
+                    ps.Start();
+                    string output = ps.StandardOutput.ReadToEnd();
+                    ps.WaitForExit(5 * 60 * 1000);
+                    string[] lines = output.Split(new char[] { '\r', '\n' },
+                        StringSplitOptions.RemoveEmptyEntries);
+                    int n = 0;
+                    foreach (string ln in lines) if (ln.StartsWith("COUNT:")) n = 1;
+                    return n > 0 ? output.Trim() : "No driver updates from Windows Update.";
+                }
+            }
+            catch (Exception e) { return "Check failed: " + e.Message; }
+        }
+
         private void Refresh(bool live)
         {
             SetStatus(live ? "Live scan — contacting Microsoft Update Catalog…" : "Scanning…");
@@ -450,30 +581,86 @@ namespace OduApp
                 List<Device> devs = NativeScan.Scan(120000);
                 List<string> excl = Store.Exclusions();
                 List<DriverUpdate> ups = Catalog.Resolve(devs, excl, live);
+                string reboot = "";
+                try { if (Ops.RebootPending(out reboot) && reboot == "") reboot = "pending"; }
+                catch { }
                 Dispatcher.Invoke(new Action(delegate
                 {
                     _devices = devs;
                     _updates = ups;
                     _pill.Text = ups.Count.ToString();
                     SetStatus(devs.Count + " devices, " + ups.Count + " need attention (" +
-                              ArchUtil.NativeArch() + ").");
+                              ArchUtil.NativeArch() + ")." +
+                              (reboot != "" ? " Restart required: " + reboot + "." : ""));
                     Show("Overview");
+                    CheckAppUpdate();
                 }));
             });
         }
 
-        private void UpdateAll()
+        private void CheckAppUpdate()
+        {
+            Task.Factory.StartNew(delegate
+            {
+                string latest = "";
+                try
+                {
+                    using (var wc = new System.Net.WebClient())
+                    {
+                        wc.Headers.Add("User-Agent", "open-driver-updater");
+                        string js = wc.DownloadString(
+                            "https://api.github.com/repos/alphingj/open-driver-updater/releases/latest");
+                        var tag = System.Text.RegularExpressions.Regex.Match(js, "\"tag_name\"\\s*:\\s*\"v?([^\"]+)\"");
+                        if (tag.Success) latest = tag.Groups[1].Value;
+                    }
+                }
+                catch { return; }
+                if (latest != "" && latest != AppVersion.Value)
+                {
+                    Dispatcher.Invoke(new Action(delegate
+                    {
+                        SetStatus("Update available: v" + AppVersion.Value + " → v" + latest +
+                                  ". Download it from the GitHub releases page.");
+                    }));
+                }
+            });
+        }
+
+        private void UpdateSel(bool selectedOnly)
         {
             var live = new List<DriverUpdate>();
-            foreach (DriverUpdate u in _updates)
-                if (u.UpdateId != "") live.Add(u);
-            if (live.Count == 0)
+            if (selectedOnly)
             {
-                MessageBox.Show("Run a Live Catalog scan first.", "Open Driver Updater");
-                return;
+                foreach (DriverUpdate u in _updates)
+                {
+                    if (u.UpdateId == "" || (u.Confidence ?? "high") != "high") continue;
+                    if (IsChecked(u)) live.Add(u);
+                }
+                if (live.Count == 0)
+                {
+                    MessageBox.Show("Nothing selected (review items are manual-only).", "Open Driver Updater");
+                    return;
+                }
             }
-            if (MessageBox.Show("Install " + live.Count + " driver updates? A backup runs first. Admin rights required.",
-                                "Open Driver Updater", MessageBoxButton.YesNo) != MessageBoxResult.Yes)
+            else
+            {
+                foreach (DriverUpdate u in _updates)
+                    if (u.UpdateId != "" && (u.Confidence ?? "high") == "high") live.Add(u);
+                if (live.Count == 0)
+                {
+                    MessageBox.Show("Run a Live Catalog scan first.", "Open Driver Updater");
+                    return;
+                }
+            }
+            int gpus = 0;
+            foreach (DriverUpdate u in live) if (u.IsGpu) gpus++;
+            string msg = "Install " + live.Count + " driver updates? A restore point + backup run first. Admin rights required.";
+            if (gpus > 0)
+                msg += "\n\nWARNING: " + gpus + " display/GPU driver(s) included — these can black-screen mid-install. Only continue if you can reboot.";
+            if (MessageBox.Show(msg, "Open Driver Updater", MessageBoxButton.YesNo) != MessageBoxResult.Yes)
+                return;
+            if (gpus > 0 && MessageBox.Show("Confirm GPU updates a second time to proceed.",
+                    "Open Driver Updater", MessageBoxButton.YesNo) != MessageBoxResult.Yes)
                 return;
             string arch = ArchUtil.NativeArch();
             Task.Factory.StartNew(delegate
@@ -487,16 +674,108 @@ namespace OduApp
                 {
                     Dispatcher.Invoke(new Action(delegate
                     {
-                        int ok = 0;
-                        foreach (JobItem j in res) if (j.Ok) ok++;
-                        SetStatus("Done " + ok + "/" + res.Count + ". A restart may be required.");
-                        MessageBox.Show("Installed " + ok + " of " + res.Count + ". A restart may be required.",
-                                        "Open Driver Updater");
+                        ShowResults(res);
                         Refresh(_live);
                     }));
                 }
                 catch { }
             });
+        }
+
+        // Checkbox state is read live from the Updates view when open.
+        private bool IsChecked(DriverUpdate u)
+        {
+            foreach (object el in _content.Children)
+            {
+                Border c = el as Border;
+                if (c == null) continue;
+                foreach (CheckBox cb in FindChecks(c))
+                    if (cb.Tag == (object)u) return cb.IsChecked == true;
+            }
+            return true;
+        }
+
+        private static System.Collections.Generic.List<CheckBox> FindChecks(DependencyObject root)
+        {
+            var out_ = new System.Collections.Generic.List<CheckBox>();
+            int n = VisualTreeHelper.GetChildrenCount(root);
+            for (int i = 0; i < n; i++)
+            {
+                DependencyObject ch = VisualTreeHelper.GetChild(root, i);
+                CheckBox cb = ch as CheckBox;
+                if (cb != null) out_.Add(cb);
+                else out_.AddRange(FindChecks(ch));
+            }
+            return out_;
+        }
+
+        private void ShowResults(List<JobItem> res)
+        {
+            var win = new Window
+            {
+                Title = "Update results", Width = 700, Height = 480,
+                Background = new SolidColorBrush(Pal.Page())
+            };
+            var sp = new StackPanel { Margin = new Thickness(12) };
+            int ok = 0;
+            foreach (JobItem j in res) if (j.Ok) ok++;
+            sp.Children.Add(new TextBlock
+            {
+                Text = "Done " + ok + "/" + res.Count + ". A restart may be required.",
+                FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 8),
+                Foreground = new SolidColorBrush(Pal.Ink())
+            });
+            foreach (JobItem j in res)
+            {
+                JobItem jj = j;
+                var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
+                row.Children.Add(new TextBlock
+                {
+                    Text = (jj.Ok ? "✓ " : "✗ ") + jj.Device + " — " + jj.Detail,
+                    Width = 520, TextWrapping = TextWrapping.Wrap,
+                    Foreground = new SolidColorBrush(Pal.Ink())
+                });
+                if (jj.Ok && jj.Published != "")
+                {
+                    var rb = new Button { Content = "Rollback", Margin = new Thickness(8, 0, 0, 0) };
+                    rb.Click += delegate
+                    {
+                        OpResult r = Ops.RollbackDriver(jj.Published);
+                        MessageBox.Show(r.Ok ? "Rolled back " + jj.Published + "." : "Rollback failed: " + r.Log,
+                                        "Open Driver Updater");
+                    };
+                    row.Children.Add(rb);
+                }
+                sp.Children.Add(row);
+            }
+            win.Content = new ScrollViewer { Content = sp };
+            win.ShowDialog();
+            SetStatus("Done " + ok + "/" + res.Count + ". A restart may be required.");
+        }
+
+        private void ExportReport()
+        {
+            var dlg = new Microsoft.Win32.SaveFileDialog();
+            dlg.FileName = "driver-report.html";
+            dlg.Filter = "HTML report|*.html";
+            if (dlg.ShowDialog() != true) return;
+            try
+            {
+                var sb = new System.Text.StringBuilder();
+                sb.Append("<!doctype html><html><head><meta charset='utf-8'><title>report</title></head><body>");
+                sb.Append("<h1>Open Driver Updater report</h1><h2>Updates</h2><ul>");
+                foreach (DriverUpdate u in _updates)
+                    sb.Append("<li>").Append(System.Security.SecurityElement.Escape(u.DeviceName))
+                      .Append(" — ").Append(System.Security.SecurityElement.Escape(u.AvailableVersion)).Append("</li>");
+                sb.Append("</ul><h2>Devices</h2><ul>");
+                foreach (Device d in _devices)
+                    sb.Append("<li>").Append(System.Security.SecurityElement.Escape(d.DisplayName()))
+                      .Append(" — ").Append(System.Security.SecurityElement.Escape(d.DriverVersion)).Append("</li>");
+                sb.Append("</ul></body></html>");
+                System.IO.File.WriteAllText(dlg.FileName, sb.ToString());
+                SetStatus("Report saved.");
+            }
+            catch (Exception e) { SetStatus("Report failed: " + e.Message); }
         }
     }
 }

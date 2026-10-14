@@ -16,7 +16,8 @@ from .arch import canonical_arch, expand_path, is_inf_compatible, pnputil_path
 
 
 def download(url: str, dest_dir: str, timeout: int = 120,
-             expected_sha256_b64: str = "") -> str:
+             expected_sha256_b64: str = "",
+             progress=None) -> str:
     """Download a CAB, optionally verifying its base64 SHA-256 (Catalog digest)."""
     os.makedirs(dest_dir, exist_ok=True)
     name = (url.split("?")[0].rsplit("/", 1)[-1] or "driver.cab")[-80:]
@@ -26,12 +27,23 @@ def download(url: str, dest_dir: str, timeout: int = 120,
     digest = hashlib.sha256()
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=timeout) as r, open(dest, "wb") as f:
+        try:
+            total = int(r.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            total = 0
+        done = 0
         while True:
             chunk = r.read(1 << 20)
             if not chunk:
                 break
             digest.update(chunk)
             f.write(chunk)
+            done += len(chunk)
+            if progress:
+                try:
+                    progress(done, total)
+                except Exception:
+                    pass
     if expected_sha256_b64:
         try:
             expected = base64.b64decode(expected_sha256_b64)
@@ -85,6 +97,32 @@ def pick_inf(infs: list[str], arch: str) -> str:
 
 def install_inf(inf: str) -> dict:
     cmd = [pnputil_path(), "/add-driver", inf, "/install"]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        log = (p.stdout + p.stderr)[-2000:]
+        return {"ok": p.returncode == 0, "log": log,
+                "published": _published_name(log)}
+    except Exception as e:
+        return {"ok": False, "log": str(e), "published": ""}
+
+
+def _published_name(log: str) -> str:
+    """Parse 'Published name : oemNN.inf' for later rollback."""
+    import re
+    m = re.search(r"Published name\s*:\s*(oem\d+\.inf)", log, re.I)
+    return m.group(1).lower() if m else ""
+
+
+def rollback_driver(published: str) -> dict:
+    """Remove a driver we installed (pnputil /delete-driver oemNN /uninstall).
+
+    Windows falls back to the previously installed driver. Only call with
+    published names recorded by install_cab/install_inf.
+    """
+    import re
+    if not re.fullmatch(r"oem\d+\.inf", (published or "").lower()):
+        return {"ok": False, "log": "refusing: not a recorded oem name"}
+    cmd = [pnputil_path(), "/delete-driver", published.lower(), "/uninstall"]
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         return {"ok": p.returncode == 0, "log": (p.stdout + p.stderr)[-2000:]}

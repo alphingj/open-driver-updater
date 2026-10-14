@@ -13,9 +13,18 @@ namespace OduApp
 
         public static List<JobItem> RunAll(List<DriverUpdate> items, string arch,
                                            Action<string> progress)
+
         {
             var results = new List<JobItem>();
             _cancel = false;
+            if (progress != null) progress("Creating system restore point…");
+            OpResult restore = Ops.RestorePoint();
+            var rp = new JobItem();
+            rp.Device = "System restore point";
+            rp.HwId = "";
+            rp.Ok = restore.Ok;
+            rp.Detail = restore.Ok ? "created" : restore.Log;
+            results.Add(rp);
             if (progress != null) progress("Backing up existing drivers…");
             OpResult backup = Ops.BackupAll(
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
@@ -55,6 +64,7 @@ namespace OduApp
                 r.HwId = u.HwId;
                 r.Ok = false;
                 r.Detail = "";
+                r.Published = "";
                 try
                 {
                     if (progress != null) progress("Resolving " + u.DeviceName + "…");
@@ -71,7 +81,12 @@ namespace OduApp
                         {
                             if (progress != null) progress("Downloading " + u.DeviceName + "…");
                             string cab = Path.Combine(dl, CabName(f.Url));
-                            if (!Ops.Download(f.Url, cab, f.Sha256B64))
+                            Action<string> prog = progress;
+                            string dev = u.DeviceName;
+                            if (!Ops.Download(f.Url, cab, f.Sha256B64, delegate(int pct)
+                            {
+                                if (prog != null) prog("Downloading " + dev + "… " + pct + "%");
+                            }))
                             {
                                 okAll = false;
                                 logs += "download failed; ";
@@ -81,6 +96,8 @@ namespace OduApp
                             OpResult inst = Ops.InstallCab(cab, arch);
                             // Keep failed CABs for offline retry/debug; drop successes.
                             if (inst.Ok) { try { File.Delete(cab); } catch { } }
+                            string pub = Ops.PublishedName(inst.Log);
+                            if (pub != "") r.Published = pub;
                             okAll = okAll && inst.Ok;
                             logs += (inst.Path != "" ? inst.Path + " :: " : "") + inst.Log + " ||| ";
                         }

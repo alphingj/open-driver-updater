@@ -29,38 +29,74 @@ async function api(path, opts) {
 // Escape all five HTML-significant chars, including quotes (values land in attributes).
 function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
+let scanTimer = null;
 async function scan() {
   $('#btn-scan').textContent = 'Scanning…';
   $('#scan-msg').textContent = '';
   const live = $('#live').checked ? '?live=1' : '';
+  const t0 = Date.now();
+  clearInterval(scanTimer);
+  scanTimer = setInterval(() => { $('#scan-msg').textContent = 'Working… ' + Math.round((Date.now() - t0) / 1000) + 's'; }, 1000);
   try {
     const j = await api('/api/scan' + live);
     state = j;
     $('#arch').textContent = 'arch: ' + (j.arch || '?');
     render();
+    checkSystem();
+    checkAppUpdate();
   } catch (e) {
     $('#scan-msg').textContent = 'Scan failed: ' + e.message;
-  } finally { $('#btn-scan').textContent = 'Scan now'; }
+  } finally { clearInterval(scanTimer); $('#btn-scan').textContent = 'Scan now'; }
+}
+async function checkSystem() {
+  try {
+    const j = await api('/api/system');
+    $('#reboot-banner').innerHTML = (j.reboot && j.reboot.pending)
+      ? `<div class="banner">Restart required — Windows reports a pending reboot (${esc((j.reboot.reasons || []).join(', '))}). Reboot before installing drivers.</div>` : '';
+  } catch (e) { }
+}
+async function checkAppUpdate() {
+  try {
+    const j = await api('/api/app-update');
+    if (j.update) $('#scan-msg').innerHTML = `Update available: v${esc(j.current)} → v${esc(j.latest)} — <a class="link" href="${esc(j.url)}" target="_blank" rel="noreferrer">download</a>`;
+  } catch (e) { }
 }
 function tagFor(status) {
   if (status === 'ERROR') return 'bad';
   if (status === 'DISCONNECTED') return 'muted-tag';
   return 'good';
 }
-function render() {
-  $('#stat-devices').textContent = state.devices.length;
-  $('#stat-updates').textContent = state.updates.length;
-  $('#pill-count').textContent = state.updates.length;
-  $('#updates').innerHTML = state.updates.length ? state.updates.map((u, i) => `
-    <div class="row-item"><div><div class="t">${esc(u.available_version && u.update_id ? u.available_version : u.device_name)}</div>
+function updateCard(u, i, review) {
+  const gpu = u.is_gpu ? '<span class="tag bad">GPU · confirm twice</span>' : '';
+  const sig = '<span class="tag good">Catalog · hash-checked on download</span>';
+  return `
+    <div class="row-item"><input type="checkbox" data-sel="${i}" ${review ? '' : 'checked'} title="include in Update selected">
+    <div><div class="t">${esc(u.available_version && u.update_id ? u.available_version : u.device_name)}</div>
     <div class="t-sub">${u.update_id ? esc(u.device_name) : ''}</div>
     <div class="s">${esc(u.hwid)} · installed: ${esc(u.installed_version || 'none')} · ${esc(u.arch)}</div></div>
-    <div class="row"><span class="tag ${u.update_id ? 'good' : 'bad'}">${u.update_id ? 'ready' : 'manual'}</span>
+    <div class="row"><span class="tag ${u.update_id ? 'good' : 'bad'}">${u.update_id ? (review ? 'review' : 'ready') : 'manual'}</span>${gpu}${sig}
     <a class="link" href="${esc(u.download_url)}" target="_blank" rel="noreferrer">Get driver ↗</a>
     ${u.vendor_url ? `<a class="link" href="${esc(u.vendor_url)}" target="_blank" rel="noreferrer">${esc(u.vendor)} ↗</a>` : ''}
-    <button class="btn" data-exclude="${i}">Exclude</button></div></div>`).join('')
+    <button class="btn" data-exclude="${i}">Exclude</button>
+    <button class="btn" data-skipver="${i}" title="skip only this version">Skip version</button></div></div>`;
+}
+function render() {
+  $('#stat-devices').textContent = state.devices.length;
+  const high = state.updates.filter(u => (u.confidence || 'high') === 'high');
+  const rev = state.updates.filter(u => (u.confidence || 'high') !== 'high');
+  $('#stat-updates').textContent = state.updates.length;
+  $('#pill-count').textContent = state.updates.length;
+  $('#n-high').textContent = high.length;
+  $('#n-review').textContent = rev.length;
+  $('#updates').innerHTML = high.length ? high.map((u) => updateCard(u, state.updates.indexOf(u), false)).join('')
     : '<div class="card">All clear — no problem devices found.</div>';
+  $('#reviews').innerHTML = rev.length ? rev.map((u) => updateCard(u, state.updates.indexOf(u), true)).join('')
+    : '<div class="card">Nothing needs a human look.</div>';
   document.querySelectorAll('[data-exclude]').forEach(b => b.onclick = () => exclude(state.updates[+b.dataset.exclude].hwid));
+  document.querySelectorAll('[data-skipver]').forEach(b => b.onclick = () => {
+    const u = state.updates[+b.dataset.skipver];
+    exclude(u.hwid + '||' + (u.available_version || ''));
+  });
   $('#devices').innerHTML = state.devices.map(d => `
     <div class="row-item"><div><div class="t">${esc(d.friendly_name || d.instance_id)}</div>
     <div class="s">${esc((d.hwid || []).join(' · ') || d.instance_id)} · ${esc(d.driver_version || 'no driver')} · ${esc(d.status)}</div></div>
@@ -118,18 +154,38 @@ $('#btn-sched-off').onclick = async () => {
   } catch (e) { $('#sched-msg').textContent = 'Failed: ' + e.message; }
 };
 let jobTimer = null;
-$('#btn-update-all').onclick = async () => {
-  const live = state.updates.filter(u => u.update_id);
-  if (!live.length) { $('#job-msg').textContent = 'Run a Live Catalog scan first.'; return; }
-  if (!confirm(`Install ${live.length} driver updates? A backup runs first and stops everything if it fails. Admin rights required.`)) return;
-  let j;
+function selectedUpdates(onlyHigh) {
+  const boxes = document.querySelectorAll('[data-sel]');
+  const out = [];
+  boxes.forEach(b => {
+    if (!b.checked) return;
+    const u = state.updates[+b.dataset.sel];
+    if (!u || !u.update_id) return;
+    if (onlyHigh && (u.confidence || 'high') !== 'high') return;
+    out.push(u);
+  });
+  return out;
+}
+async function startJob(updates) {
+  if (!updates.length) { $('#job-msg').textContent = 'Nothing selected (review items are manual-only).'; return; }
+  const gpus = updates.filter(u => u.is_gpu);
+  let msg = `Install ${updates.length} driver updates? A restore point + backup run first. Admin rights required.`;
+  if (gpus.length) msg += `\n\nWARNING: ${gpus.length} display/GPU driver(s):\n` + gpus.map(g => ' - ' + g.device_name).join('\n') + '\nGPU updates can black-screen mid-install. Continue only if you can reboot.';
+  if (!confirm(msg)) return;
+  if (gpus.length && !confirm('Confirm GPU updates a second time to proceed.')) return;
   try {
-    j = await api('/api/update-all',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({updates: live})});
+    await api('/api/update-all',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({updates})});
   } catch (e) { $('#job-msg').textContent = 'Could not start: ' + e.message; return; }
   $('#job-bar').classList.remove('hidden');
   clearInterval(jobTimer);
   jobTimer = setInterval(pollJob, 2000);
+}
+$('#btn-update-all').onclick = async () => {
+  const live = state.updates.filter(u => u.update_id && (u.confidence || 'high') === 'high');
+  if (!live.length) { $('#job-msg').textContent = 'Run a Live Catalog scan first.'; return; }
+  startJob(live);
 };
+$('#btn-update-sel').onclick = async () => startJob(selectedUpdates(true));
 $('#btn-stop').onclick = async () => {
   $('#job-msg').textContent = 'Cancelling after the current driver…';
   try { await api('/api/cancel', { method: 'POST' }); } catch (e) { /* job will notice */ }
@@ -141,8 +197,65 @@ async function pollJob() {
     $('#job-fill').style.width = pct + '%';
     $('#job-msg').textContent = s.running ? `Working ${s.done}/${s.total} — ${s.current}` : (s.total ? `Done ${s.done}/${s.total}.` : '');
     const failed = (s.results || []).some(r => !r.ok);
-    $('#job-log').innerHTML = (s.results || []).map(r => `<div class="row-item"><div><div class="t">${esc(r.device)}</div><div class="s">${esc(r.detail || '')}</div></div><span class="tag ${r.ok ? 'good' : 'bad'}">${r.ok ? 'ok' : 'failed'}</span></div>`).join('')
+    $('#job-log').innerHTML = (s.results || []).map(r => `<div class="row-item"><div><div class="t">${esc(r.device)}</div><div class="s">${esc(r.detail || '')}</div></div><div class="row"><span class="tag ${r.ok ? 'good' : 'bad'}">${r.ok ? 'ok' : 'failed'}</span>${r.published ? `<button class="btn" data-rb="${esc(r.published)}">Rollback</button>` : ''}</div></div>`).join('')
       + ((!s.running && s.total) ? `<div class="card"><b>${failed ? 'Finished with errors — review the log above.' : 'All updates installed.'} A restart may be required for drivers to take effect.</b></div>` : '');
+    document.querySelectorAll('[data-rb]').forEach(b => b.onclick = async () => {
+      const oem = b.dataset.rb;
+      if (!confirm('Roll back ' + oem + '? Windows will revert to the previous driver.')) return;
+      try {
+        const j = await api('/api/rollback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ published: oem }) });
+        b.outerHTML = '<span class="tag ' + (j.ok ? 'good' : 'bad') + '">' + (j.ok ? 'rolled back' : 'failed') + '</span>';
+      } catch (e) { b.outerHTML = '<span class="tag bad">failed</span>'; }
+    });
     if (!s.running && s.total) { clearInterval(jobTimer); scan(); }
 }
+$('#btn-report').onclick = async () => {
+  try {
+    const live = $('#live').checked;
+    const j = await api('/api/report', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ live }) });
+    const blob = new Blob([j.report], { type: 'text/html' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'driver-report.html';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  } catch (e) { $('#job-msg').textContent = 'Report failed: ' + e.message; }
+};
+$('#btn-folder').onclick = async () => {
+  const folder = $('#folder-path').value.trim();
+  if (!folder) { $('#folder-msg').textContent = 'Enter a folder path first.'; return; }
+  $('#folder-msg').textContent = 'Installing…';
+  try {
+    const j = await api('/api/folder-install', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder }) });
+    $('#folder-msg').textContent = j.ok ? 'Installed.' : 'Failed: ' + (j.log || '');
+  } catch (e) { $('#folder-msg').textContent = 'Failed: ' + e.message; }
+};
+$('#btn-comp').onclick = async () => {
+  $('#components').innerHTML = '<div class="card">Checking…</div>';
+  try {
+    const j = await api('/api/components');
+    $('#components').innerHTML = j.components.map(c => `<div class="row-item"><div><div class="t">${esc(c.name)}</div><div class="s">${esc(c.detail || '')}</div></div><div class="row"><span class="tag ${c.status === 'ok' ? 'good' : 'bad'}">${esc(c.status)}</span><a class="link" href="${esc(c.url)}" target="_blank" rel="noreferrer">Microsoft download ↗</a></div></div>`).join('');
+  } catch (e) { $('#components').innerHTML = '<div class="card">Check failed: ' + esc(e.message) + '</div>'; }
+};
+let _wu = [];
+$('#btn-wu').onclick = async () => {
+  $('#wu-list').innerHTML = '<div class="card">Asking Windows Update (can take minutes)…</div>';
+  try {
+    const j = await api('/api/wu');
+    _wu = j.updates || [];
+    $('#wu-list').innerHTML = _wu.length ? _wu.map((w, i) => `<div class="row-item"><input type="checkbox" data-wu="${i}" checked><div><div class="t">${esc(w.title)}</div><div class="s">KB ${esc(w.kb)} · ${Math.round((w.size || 0) / 1048576)} MB${w.reboot ? ' · needs reboot' : ''}</div></div></div>`).join('')
+      : '<div class="card">No driver updates offered by Windows Update.</div>';
+  } catch (e) { $('#wu-list').innerHTML = '<div class="card">Check failed: ' + esc(e.message) + '</div>'; }
+};
+$('#btn-wu-install').onclick = async () => {
+  const titles = [];
+  document.querySelectorAll('[data-wu]').forEach(b => { if (b.checked) titles.push(_wu[+b.dataset.wu].title); });
+  if (!titles.length) { $('#wu-msg').textContent = 'Nothing selected.'; return; }
+  if (!confirm(`Download and install ${titles.length} Windows Update driver(s)? Admin rights required.`)) return;
+  $('#wu-msg').textContent = 'Installing (minutes)…';
+  try {
+    const j = await api('/api/wu-install', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ titles }) });
+    $('#wu-msg').textContent = j.ok ? 'Installed.' : 'Failed: ' + (j.log || '');
+  } catch (e) { $('#wu-msg').textContent = 'Failed: ' + e.message; }
+};
 scan();

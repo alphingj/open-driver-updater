@@ -33,6 +33,8 @@ class DriverUpdate:
     title: str = ""
     update_id: str = ""  # MS Catalog GUID; enables one-click CAB download
     size: int = 0  # Catalog-reported bytes; sent with the download request
+    confidence: str = "high"  # high | review (review = plausible, needs a human)
+    is_gpu: bool = False  # Display-class: extra confirmation recommended
     vendor: str = ""
     vendor_url: str = ""
 

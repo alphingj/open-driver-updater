@@ -56,15 +56,35 @@ def job_snapshot() -> dict:
                 "started": JOB["started"], "backup": JOB["backup"]}
 
 
+def _dl_progress(name: str, done: int, total: int) -> None:
+    with _JOB_LOCK:
+        if total > 0:
+            pct = min(100, done * 100 // total)
+            JOB["current"] = f"Downloading {name}… {pct}%"
+        else:
+            JOB["current"] = f"Downloading {name}… {done // 1024} KB"
+
+
 def _job_run(items: list[dict]) -> None:
     from odu import arch as arch_mod
     from odu import backup as backup_mod
     from odu import catalog as catalog_mod
     from odu import installer as installer_mod
+    from odu import safety as safety_mod
     with _JOB_LOCK:
         JOB.update(running=True, total=len(items), done=0, current="",
-                   results=[], started=time.time(), backup=None, cancel=False)
+                   results=[], started=time.time(), backup=None, cancel=False,
+                   restore=None)
     try:
+        with _JOB_LOCK:
+            JOB["current"] = "Creating system restore point…"
+        restore_res = safety_mod.create_restore_point()
+        with _JOB_LOCK:
+            JOB["restore"] = restore_res
+            JOB["results"].append({"device": "System restore point",
+                                   "hwid": "",
+                                   "ok": bool(restore_res.get("ok")),
+                                   "detail": str(restore_res.get("log", ""))})
         dest = os.path.join(os.path.expanduser("~"), "odu-backup")
         with _JOB_LOCK:
             JOB["current"] = "Backing up existing drivers…"
@@ -98,20 +118,27 @@ def _job_run(items: list[dict]) -> None:
                 if not urls:
                     res["detail"] = "no CAB published for this update"
                 else:
-                    ok_all, logs = True, []
-                    for u in urls:
+                    ok_all, logs, published = True, [], ""
+                    n_files = len(urls)
+                    for n, u in enumerate(urls, 1):
                         with _JOB_LOCK:
-                            JOB["current"] = f"Downloading {name}…"
+                            JOB["current"] = (f"Downloading {name}…"
+                                              if n_files == 1 else
+                                              f"Downloading {name} ({n}/{n_files})…")
                         cab = installer_mod.download(
                             u["url"], dl_dir,
-                            expected_sha256_b64=u.get("sha256", ""))
+                            expected_sha256_b64=u.get("sha256", ""),
+                            progress=lambda done, total, name=name: _dl_progress(name, done, total))
                         with _JOB_LOCK:
                             JOB["current"] = f"Installing {name}…"
                         inst = installer_mod.install_cab(cab, arch)
                         ok_all = ok_all and bool(inst.get("ok"))
+                        if inst.get("published"):
+                            published = inst["published"]
                         logs.append(str(inst.get("inf", "")) + " :: "
                                     + str(inst.get("log", ""))[-200:])
                     res["ok"] = ok_all
+                    res["published"] = published
                     res["detail"] = " ||| ".join(logs)[-2000:]
             except Exception as e:  # keep going through the queue
                 res["detail"] = str(e)[-300:]
@@ -190,6 +217,18 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json(scheduler.status())
             if parsed.path == "/api/job":
                 return self._json(job_snapshot())
+            if parsed.path == "/api/system":
+                from odu import safety as safety_mod
+                return self._json({"reboot": safety_mod.reboot_pending()})
+            if parsed.path == "/api/app-update":
+                return self._json(_app_update())
+            if parsed.path == "/api/components":
+                from odu import components
+                return self._json({"components": components.check()})
+            if parsed.path == "/api/wu":
+                from odu import wu
+                return self._json({"updates": wu.search()})
+            return super().do_GET()
             if parsed.path == "/api/cancel":
                 with _JOB_LOCK:
                     JOB["cancel"] = True
@@ -245,13 +284,89 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json({"ok": False, "error": "a job is already running"}, 409)
             raw = data.get("updates") or []
             items = [u for u in raw
-                     if isinstance(u, dict) and _GUID_RE.match(str(u.get("update_id", "")))]
+                     if isinstance(u, dict) and _GUID_RE.match(str(u.get("update_id", "")))
+                     and str(u.get("confidence", "high")) == "high"]
             if not items:
                 return self._json({"ok": False,
-                                    "error": "no live Catalog updates — run a Live scan first"}, 400)
+                                    "error": "no high-confidence Catalog updates — review items need manual install"}, 400)
             threading.Thread(target=_job_run, args=(items,), daemon=True).start()
             return self._json({"ok": True, "total": len(items)})
+        if parsed.path == "/api/rollback":
+            from odu import installer as installer_mod
+            return self._json(installer_mod.rollback_driver(str(data.get("published", ""))))
+        if parsed.path == "/api/wu-install":
+            from odu import wu
+            titles = data.get("titles") or []
+            return self._json(wu.install([str(t) for t in titles]))
+        if parsed.path == "/api/report":
+            from odu import scanner, catalog, arch
+            devs = scanner.scan()
+            ups = catalog.resolve_updates(devs, arch.native_arch(),
+                                          live_catalog=bool(data.get("live")))
+            return self._json({"report": _html_report(devs, ups)})
+        if parsed.path == "/api/folder-install":
+            from odu import installer as installer_mod
+            from odu import arch as arch_mod
+            folder = str(data.get("folder", ""))
+            if not os.path.exists(folder):
+                return self._json({"ok": False, "log": "path does not exist"}, 400)
+            if os.path.isfile(folder) and folder.lower().endswith(".cab"):
+                return self._json(installer_mod.install_cab(folder, arch_mod.native_arch()))
+            # pnputil /add-driver accepts a directory of INFs as well as one INF
+            return self._json(installer_mod.install_inf(folder))
         return self._json({"ok": False, "error": "unknown route"}, 404)
+
+
+_APP_UPDATE_CACHE: dict = {"at": 0.0, "body": None}
+
+
+def _app_update() -> dict:
+    from odu import __version__
+    now = time.time()
+    if _APP_UPDATE_CACHE["body"] is not None and now - _APP_UPDATE_CACHE["at"] < 86400:
+        return _APP_UPDATE_CACHE["body"]
+    body: dict = {"current": __version__, "latest": __version__, "url": "",
+                  "update": False}
+    try:
+        req = urllib.request.Request(
+            "https://api.github.com/repos/alphingj/open-driver-updater/releases/latest",
+            headers={"User-Agent": "open-driver-updater", "Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            rel = json.loads(r.read(65536).decode("utf-8", "ignore"))
+        latest = str(rel.get("tag_name", "")).lstrip("v")
+        if latest and latest != __version__:
+            body = {"current": __version__, "latest": latest,
+                    "url": str(rel.get("html_url", "")), "update": True}
+    except Exception:
+        pass
+    _APP_UPDATE_CACHE.update(at=now, body=body)
+    return body
+
+
+def _html_report(devs: list, ups: list) -> str:
+    import html as html_mod
+    from odu import arch
+
+    def esc(x: object) -> str:
+        return html_mod.escape(str(x or ""))
+
+    rows = "\n".join(
+        f"<tr><td>{esc(d.friendly_name or d.instance_id)}</td>"
+        f"<td>{esc((d.hwid or [''])[0])}</td>"
+        f"<td>{esc(d.driver_version or 'none')}</td><td>{esc(d.status)}</td></tr>"
+        for d in devs)
+    urows = "\n".join(
+        f"<tr><td>{esc(u.device_name)}</td><td>{esc(u.hwid)}</td>"
+        f"<td>{esc(u.installed_version or 'none')}</td>"
+        f"<td>{esc(u.available_version)}</td>"
+        f"<td>{esc(u.confidence)}</td></tr>"
+        for u in ups)
+    return (f"<!doctype html><html><head><meta charset='utf-8'>"
+            f"<title>Open Driver Updater report</title></head><body>"
+            f"<h1>Open Driver Updater report ({esc(arch.native_arch())})</h1>"
+            f"<h2>Updates ({len(ups)})</h2><table border='1'>{urows}</table>"
+            f"<h2>Devices ({len(devs)})</h2><table border='1'>{rows}</table>"
+            f"</body></html>")
 
 
 def serve(port: int = 8901) -> None:

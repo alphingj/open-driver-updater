@@ -316,6 +316,40 @@ def is_newer(available: tuple[int, ...], installed: str) -> bool:
     return a > b
 
 
+def _norm_date(s: str) -> str:
+    m = re.search(r"(\d{4})\D?(\d{2})\D?(\d{2})", s or "")
+    return "".join(m.groups()) if m else ""
+
+
+def fuzzy_newer(title: str, installed_version: str, installed_date: str = "") -> str:
+    """Second opinion when version schemes are incomparable.
+
+    Returns "yes" (strictly newer), "review" (plausible but unverifiable), or
+    "no". A catalog driver dated after the installed driver date, or sharing
+    the vendor but an unparsable version, lands in "review" — shown in a
+    separate list, never auto-installed by Update All.
+    """
+    aver = catalog_version(title)
+    if aver and installed_version and not is_newer(aver, installed_version):
+        # Same scheme and not newer... unless schemes merely look alike.
+        # Check the date: a newer-dated driver with a lower-looking version
+        # (e.g. AMD 7.x vs installed 32.x) deserves human review.
+        have = _parse_version(installed_version)
+        if have and aver < have:
+            td = _norm_date(title)
+            if td and installed_date and td > _norm_date(installed_date):
+                return "review"
+        return "no"
+    if aver:
+        return "yes" if is_newer(aver, installed_version) else "no"
+    return "review" if installed_version else "yes"
+
+
+def _skipped(dev: Device, excluded: set[str], available: str = "") -> bool:
+    return (dev.hwid[0] in excluded or dev.instance_id in excluded
+            or (dev.hwid[0] + "||" + available) in excluded)
+
+
 def resolve_updates(devices: list[Device], arch: str | None = None,
                     live_catalog: bool = False) -> list[DriverUpdate]:
     arch = native_arch() if arch is None else arch
@@ -343,15 +377,20 @@ def resolve_updates(devices: list[Device], arch: str | None = None,
                 pass  # generic-query hit for unrelated hardware: ignore
             else:
                 f = found[0]
-                aver = catalog_version(f["title"])
-                if dev.driver_version and not is_newer(aver, dev.driver_version):
-                    continue  # installed is current (or schemes incomparable)
+                verdict = fuzzy_newer(f["title"], dev.driver_version,
+                                      dev.driver_date)
+                if verdict == "no":
+                    continue  # installed is current
+                if _skipped(dev, excluded, _cut(f["title"], 64)):
+                    continue  # version-scoped skip
                 updates.append(DriverUpdate(
                     hwid=hwid, device_name=dev.friendly_name or dev.instance_id,
                     instance_id=dev.instance_id, installed_version=dev.driver_version,
                     available_version=_cut(f["title"], 64), source="ms-catalog",
                     download_url=f["url"], arch=arch, title=f["title"],
                     update_id=f["id"], size=int(f.get("size") or 0),
+                    confidence="high" if verdict == "yes" else "review",
+                    is_gpu=(dev.dev_class or "").lower() == "display",
                     vendor=hint["vendor"], vendor_url=hint["url"]))
                 continue
         if not live_catalog and not _needs(dev):

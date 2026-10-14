@@ -10,3 +10,5 @@ cs/bin/
 *.exe
 installer/Output/
 
+scripts/live_result.json
+
