@@ -360,6 +360,35 @@ class SafetyTest(unittest.TestCase):
         finally:
             _sp2.run = real
 
+    def test_restore_point_frequency(self):
+        import subprocess as _sp
+        from odu import safety
+
+        class R:
+            def __init__(self, out):
+                self.stdout = out
+                self.stderr = ""
+                self.returncode = 0
+
+        real_run, real_recent = _sp.run, safety._recent_restore_point
+        try:
+            # recent point exists -> skip quietly, reported ok
+            safety._recent_restore_point = lambda within_hours=24: True
+            r = safety.create_restore_point()
+            self.assertTrue(r["ok"])
+            self.assertIn("skipped", r["log"])
+            # frequency-limit failure text -> friendly ok, not a red error
+            safety._recent_restore_point = lambda within_hours=24: False
+            _sp.run = lambda *a, **k: R("WARNING: A new system restore point cannot "
+                                        "be created because one has already been created "
+                                        "within the past 1440 minutes.")
+            r = safety.create_restore_point()
+            self.assertTrue(r["ok"])
+            self.assertIn("24 hours", r["log"])
+        finally:
+            _sp.run = real_run
+            safety._recent_restore_point = real_recent
+
 
 if __name__ == "__main__":
     unittest.main()

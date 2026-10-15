@@ -276,11 +276,58 @@ namespace OduApp
 
         public static OpResult RestorePoint()
         {
-            return Run("powershell.exe",
+            // powershell.exe exits 0 even when Checkpoint writes FAIL, so the
+            // old code reported success unconditionally. Parse stdout instead.
+            OpResult recent = RecentRestorePoint();
+            if (recent.Ok) return recent;
+            OpResult r = Run("powershell.exe",
                 "-NoProfile -Command \"Try { Checkpoint-Computer " +
                 "-Description 'Open Driver Updater' -RestorePointType 'MODIFY_SETTINGS' " +
                 "-ErrorAction Stop; 'OK' } Catch { 'FAIL: ' + $_.Exception.Message }\"",
                 5 * 60 * 1000);
+            string stdout = (r.Log ?? "");
+            var m = new OpResult();
+            if (stdout.Trim() == "OK")
+            {
+                m.Ok = true;
+                m.Log = "restore point created";
+                return m;
+            }
+            if (stdout.Contains("1440") || stdout.Contains("already been created"))
+            {
+                m.Ok = true;
+                m.Log = "recent restore point already exists (Windows allows " +
+                        "one per 24 hours) — reused";
+                return m;
+            }
+            m.Ok = false;
+            m.Log = stdout.Length > 500 ? stdout.Substring(stdout.Length - 500) : stdout;
+            return m;
+        }
+
+        // True (ok) when a restore point from the last 24h exists.
+        public static OpResult RecentRestorePoint()
+        {
+            var m = new OpResult();
+            m.Ok = false;
+            m.Log = "";
+            try
+            {
+                OpResult r = Run("powershell.exe",
+                    "-NoProfile -Command \"Get-ComputerRestorePoint | " +
+                    "Sort-Object CreationTime -Descending | Select-Object -First 1 | " +
+                    "ForEach-Object { $_.CreationTime.ToString('o') }\"",
+                    120000);
+                DateTime when;
+                if (r.Ok && DateTime.TryParse(r.Log.Trim(), out when) &&
+                    (DateTime.Now - when).TotalHours < 24)
+                {
+                    m.Ok = true;
+                    m.Log = "recent restore point exists, skipped";
+                }
+            }
+            catch { }
+            return m;
         }
 
         public static bool RebootPending(out string reasons)

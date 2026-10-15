@@ -14,7 +14,8 @@ def _recent_restore_point(within_hours: int = 24) -> bool:
     if not _win():
         return False
     ps = ("Get-ComputerRestorePoint | Sort-Object CreationTime -Descending | "
-          "Select-Object -First 1 -ExpandProperty CreationTime")
+          "Select-Object -First 1 | "
+          "ForEach-Object { $_.CreationTime.ToString('o') }")
     try:
         p = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
                            capture_output=True, text=True, timeout=120)
@@ -22,13 +23,13 @@ def _recent_restore_point(within_hours: int = 24) -> bool:
         ts = (p.stdout or "").strip()
         if not ts:
             return False
-        for fmt in ("%m/%d/%Y %I:%M:%S %p", "%d/%m/%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
-            try:
-                when = datetime.datetime.strptime(ts.split(".")[0].strip(), fmt)
-                return (datetime.datetime.now() - when).total_seconds() < within_hours * 3600
-            except ValueError:
-                continue
-        return False
+        try:
+            when = datetime.datetime.fromisoformat(ts)
+        except ValueError:
+            return False
+        if when.tzinfo is not None:
+            when = when.replace(tzinfo=None)
+        return (datetime.datetime.now() - when).total_seconds() < within_hours * 3600
     except Exception:
         return False
 
@@ -50,7 +51,13 @@ def create_restore_point(description: str = "Open Driver Updater",
         out = (p.stdout or "").strip()
         if out == "OK":
             return {"ok": True, "log": "restore point created"}
-        return {"ok": False, "log": out[-500:] or p.stderr[-500:]}
+        if "1440" in out or "already been created" in out:
+            # Benign: Windows caps manual points at one per 24h, so a recent
+            # point already exists. Treat as safety-net-present, say so.
+            return {"ok": True,
+                    "log": "recent restore point already exists (Windows allows "
+                           "one per 24 hours) — reused"}
+        return {"ok": False, "log": out[-500:] or (p.stderr or "")[-500:]}
     except Exception as e:
         return {"ok": False, "log": str(e)}
 
