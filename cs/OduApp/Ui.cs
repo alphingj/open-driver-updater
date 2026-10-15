@@ -42,6 +42,7 @@ namespace OduApp
         private List<Device> _devices = new List<Device>();
         private List<DriverUpdate> _updates = new List<DriverUpdate>();
         private bool _live;
+        private string _view = "Overview";
         private StackPanel _content;
         private TextBlock _status;
         private TextBlock _pill;
@@ -111,7 +112,8 @@ namespace OduApp
             var live = new CheckBox
             {
                 Content = "Live Catalog", VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 12, 0), Foreground = new SolidColorBrush(Pal.Ink())
+                Margin = new Thickness(0, 0, 12, 0), Foreground = new SolidColorBrush(Pal.Ink()),
+                ToolTip = "Contact Microsoft Update Catalog: finds outdated drivers too (takes a minute or two)."
             };
             live.Checked += delegate { _live = true; };
             live.Unchecked += delegate { _live = false; };
@@ -191,6 +193,7 @@ namespace OduApp
 
         private void Show(string view)
         {
+            _view = view;
             _content.Children.Clear();
             if (view == "Overview") ShowOverview();
             else if (view == "Updates") ShowUpdates();
@@ -727,7 +730,7 @@ namespace OduApp
                     SetStatus(devs.Count + " devices, " + ups.Count + " need attention (" +
                               ArchUtil.NativeArch() + ")." +
                               (reboot != "" ? " Restart required: " + reboot + "." : ""));
-                    Show("Overview");
+                    Show(_view);
                     CheckAppUpdate();
                 }));
             });
