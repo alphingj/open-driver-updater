@@ -66,7 +66,7 @@ namespace OduApp
 
             var side = new StackPanel { Background = new SolidColorBrush(Pal.Side()) };
             side.Children.Add(Brand());
-            string[] views = new string[] { "Overview", "Updates", "Devices", "Backup", "Schedule", "Excluded", "Components", "Win Update" };
+            string[] views = new string[] { "Overview", "Updates", "Devices", "Backup", "Schedule", "Excluded", "Components", "Win Update", "Game Boost" };
             foreach (string v in views)
             {
                 var b = NavButton(v);
@@ -199,6 +199,7 @@ namespace OduApp
             else if (view == "Schedule") ShowSchedule();
             else if (view == "Components") ShowComponents();
             else if (view == "Win Update") ShowWinUpdate();
+            else if (view == "Game Boost") ShowGameBoost();
             else ShowExcluded();
         }
 
@@ -393,6 +394,58 @@ namespace OduApp
             sp.Children.Add(b);
             c.Child = sp;
             _content.Children.Add(c);
+            var one = Card();
+            var osp = new StackPanel();
+            osp.Children.Add(new TextBlock { Text = "Per-driver backup", FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(Pal.Ink()) });
+            osp.Children.Add(new TextBlock
+            {
+                Text = "Export one published driver package.",
+                Foreground = new SolidColorBrush(Pal.Muted()), TextWrapping = TextWrapping.Wrap
+            });
+            var lb = new Button { Content = "List drivers", Margin = new Thickness(0, 8, 0, 0) };
+            lb.Click += delegate
+            {
+                Task.Factory.StartNew(delegate
+                {
+                    List<Ops.DriverPackage> pkgs = Ops.EnumDrivers();
+                    Dispatcher.Invoke(new Action(delegate
+                    {
+                        SetStatus(pkgs.Count + " published packages.");
+                        foreach (Ops.DriverPackage p in pkgs)
+                        {
+                            Ops.DriverPackage pp = p;
+                            var e = Card();
+                            var rp = new StackPanel { Orientation = Orientation.Horizontal };
+                            rp.Children.Add(new TextBlock
+                            {
+                                Text = (pp.Original ?? pp.Oem) + " " + (pp.Version ?? "") +
+                                       "\n" + pp.Oem + " · " + (pp.Provider ?? ""),
+                                Width = 560, TextWrapping = TextWrapping.Wrap,
+                                Foreground = new SolidColorBrush(Pal.Ink())
+                            });
+                            var xb = new Button { Content = "Export", Margin = new Thickness(8, 0, 0, 0) };
+                            xb.Click += delegate
+                            {
+                                Task.Factory.StartNew(delegate
+                                {
+                                    OpResult r = Ops.ExportDriver(pp.Oem, System.IO.Path.Combine(
+                                        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "odu-backup"));
+                                    Dispatcher.Invoke(new Action(delegate
+                                    {
+                                        SetStatus(r.Ok ? "Exported: " + r.Path : "Failed: " + r.Log);
+                                    }));
+                                });
+                            };
+                            rp.Children.Add(xb);
+                            e.Child = rp;
+                            _content.Children.Add(e);
+                        }
+                    }));
+                });
+            };
+            osp.Children.Add(lb);
+            one.Child = osp;
+            _content.Children.Add(one);
             foreach (string[] bk in Store.Backups())
             {
                 var e = Card();
@@ -485,6 +538,77 @@ namespace OduApp
         }
 
         private void SetStatus(string s) { _status.Text = s; }
+
+        private void ShowGameBoost()
+        {
+            var c = Card();
+            var sp = new StackPanel();
+            sp.Children.Add(new TextBlock { Text = "Game Boost", FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(Pal.Ink()) });
+            sp.Children.Add(new TextBlock
+            {
+                Text = "Heaviest memory processes. End what you don't need before gaming. Critical system processes are never listed.",
+                Foreground = new SolidColorBrush(Pal.Muted()), TextWrapping = TextWrapping.Wrap
+            });
+            c.Child = sp;
+            _content.Children.Add(c);
+            Task.Factory.StartNew(delegate
+            {
+                var rows = new List<string[]>();
+                var blocked = new HashSet<string>(new string[] {
+                    "system", "registry", "smss", "csrss", "wininit", "services",
+                    "lsass", "lsaiso", "svchost", "winlogon", "dwm", "explorer",
+                    "taskhostw", "sihost", "ctfmon", "audiodg", "conhost", "idle" });
+                foreach (Process p in Process.GetProcesses())
+                {
+                    string n = "";
+                    int pid = 0;
+                    long mb = 0;
+                    try
+                    {
+                        n = p.ProcessName;
+                        pid = p.Id;
+                        mb = p.WorkingSet64 / 1048576;
+                    }
+                    catch { continue; }
+                    if (pid < 100 || blocked.Contains(n.ToLowerInvariant())) continue;
+                    rows.Add(new string[] { n, pid.ToString(), mb.ToString() });
+                }
+                rows.Sort(delegate(string[] a, string[] b)
+                {
+                    return long.Parse(b[2]).CompareTo(long.Parse(a[2]));
+                });
+                if (rows.Count > 25) rows.RemoveRange(25, rows.Count - 25);
+                Dispatcher.Invoke(new Action(delegate
+                {
+                    foreach (string[] r in rows)
+                    {
+                        string name = r[0];
+                        int pid = 0;
+                        int.TryParse(r[1], out pid);
+                        var e = Card();
+                        var rp = new StackPanel { Orientation = Orientation.Horizontal };
+                        rp.Children.Add(new TextBlock
+                        {
+                            Text = name + "  ·  PID " + pid + "  ·  " + r[2] + " MB",
+                            VerticalAlignment = VerticalAlignment.Center, Width = 560,
+                            Foreground = new SolidColorBrush(Pal.Ink())
+                        });
+                        var kb = new Button { Content = "End task", Margin = new Thickness(8, 0, 0, 0) };
+                        kb.Click += delegate
+                        {
+                            if (MessageBox.Show("End " + name + "? Unsaved work in it will be lost.",
+                                    "Open Driver Updater", MessageBoxButton.YesNo) != MessageBoxResult.Yes)
+                                return;
+                            try { Process.GetProcessById(pid).Kill(); ShowGameBoost(); }
+                            catch (Exception ex) { MessageBox.Show("Failed: " + ex.Message, "Open Driver Updater"); }
+                        };
+                        rp.Children.Add(kb);
+                        e.Child = rp;
+                        _content.Children.Add(e);
+                    }
+                }));
+            });
+        }
 
         private void ShowComponents()
         {

@@ -233,6 +233,12 @@ class Handler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/wu":
                 from odu import wu
                 return self._json({"updates": wu.search()})
+            if parsed.path == "/api/drivers":
+                from odu import drivers as drivers_mod
+                return self._json({"drivers": drivers_mod.enum_drivers()})
+            if parsed.path == "/api/procs":
+                from odu import gameboost
+                return self._json({"procs": gameboost.top_processes()})
             return super().do_GET()
             if parsed.path == "/api/cancel":
                 with _JOB_LOCK:
@@ -330,6 +336,13 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json(installer_mod.install_cab(folder, arch_mod.native_arch()))
             # pnputil /add-driver accepts a directory of INFs as well as one INF
             return self._json(installer_mod.install_inf(folder))
+        if parsed.path == "/api/backup-one":
+            from odu import drivers as drivers_mod
+            dest = data.get("dest") or os.path.join(os.path.expanduser("~"), "odu-backup")
+            return self._json(drivers_mod.export_driver(str(data.get("oem", "")), str(dest)))
+        if parsed.path == "/api/kill":
+            from odu import gameboost
+            return self._json(gameboost.kill(data.get("pid", 0)))
         return self._json({"ok": False, "error": "unknown route"}, 404)
 
 

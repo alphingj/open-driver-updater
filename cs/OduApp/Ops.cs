@@ -1,5 +1,6 @@
 // pnputil / schtasks / expand wrappers. All stdlib, admin needed for install.
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
@@ -213,6 +214,64 @@ namespace OduApp
         public static OpResult SchedStatus()
         {
             return Sched("/Query /TN OpenDriverUpdaterScan");
+        }
+
+        public class DriverPackage
+        {
+            public string Oem;
+            public string Original;
+            public string Provider;
+            public string Class;
+            public string Version;
+        }
+
+        public static List<DriverPackage> EnumDrivers()
+        {
+            var out_ = new List<DriverPackage>();
+            OpResult r = Run(ArchUtil.Tool("pnputil.exe"), "/enum-drivers", 120000);
+            if (!r.Ok) return out_;
+            var cur = new DriverPackage();
+            foreach (string raw in r.Log.Split(new char[] { '\r', '\n' }))
+            {
+                string line = raw.Trim();
+                if (line == "")
+                {
+                    if (cur.Oem != "") out_.Add(cur);
+                    cur = new DriverPackage();
+                    continue;
+                }
+                int colon = line.IndexOf(':');
+                if (colon < 0) continue;
+                string k = line.Substring(0, colon).Trim().ToLowerInvariant();
+                string v = line.Substring(colon + 1).Trim();
+                if (k == "published name" && System.Text.RegularExpressions.Regex.IsMatch(v, "^oem\\d+\\.inf$", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                    cur.Oem = v.ToLowerInvariant();
+                else if (k == "original name") cur.Original = v;
+                else if (k == "provider name") cur.Provider = v;
+                else if (k == "class name") cur.Class = v;
+                else if (k == "driver version") cur.Version = v;
+            }
+            if (cur.Oem != "") out_.Add(cur);
+            return out_;
+        }
+
+        public static OpResult ExportDriver(string oem, string destRoot)
+        {
+            var r = new OpResult();
+            oem = (oem ?? "").Trim().ToLowerInvariant();
+            if (!System.Text.RegularExpressions.Regex.IsMatch(oem, "^oem\\d+\\.inf$"))
+            {
+                r.Ok = false;
+                r.Log = "refusing: not an oem name";
+                return r;
+            }
+            string dest = Path.Combine(destRoot, oem + "-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
+            try { Directory.CreateDirectory(dest); }
+            catch (Exception e) { r.Ok = false; r.Log = e.Message; return r; }
+            r = Run(ArchUtil.Tool("pnputil.exe"), "/export-driver " + oem + " \"" + dest + "\"", 5 * 60 * 1000);
+            r.Path = dest;
+            if (r.Ok) Store.RecordBackup(oem, dest);
+            return r;
         }
 
         public static OpResult RestorePoint()

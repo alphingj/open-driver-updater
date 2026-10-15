@@ -55,6 +55,9 @@
       <div class="card"><h3>Install from folder (offline)</h3><p class="muted">Point at a folder of INF files (e.g. a driver pack) or a .cab file.</p>
       <div class="row"><input id="folder-path" class="input" placeholder="C:\drivers\mypack"><button id="btn-folder" class="btn">Install</button><span id="folder-msg" class="muted"></span></div></div>
       <div id="backups" class="list"></div>
+      <div class="card"><h3>Per-driver backup</h3><p class="muted">Export one published driver package (like Advanced Driver Updater's selective backup).</p>
+      <div class="row"><button id="btn-drivers" class="btn">List drivers</button><span id="drivers-msg" class="muted"></span></div></div>
+      <div id="driverpkgs" class="list"></div>
     </section>
     <section id="view-schedule" class="view hidden">
       <div class="card"><h3>Automatic scans</h3><p class="muted">Registers a weekly Task Scheduler entry (Sunday 10:00).</p>
@@ -65,6 +68,9 @@
       <div class="card"><h3>Game & runtime components</h3><p class="muted">VC++ redistributables and DirectX that games need, with official Microsoft links.</p>
       <div class="row"><button id="btn-comp" class="btn primary">Check</button></div></div>
       <div id="components" class="list"></div>
+      <div class="card"><h3>Game Boost</h3><p class="muted">Top memory-hungry processes. End what you don't need before gaming — critical system processes are never listed.</p>
+      <div class="row"><button id="btn-procs" class="btn">List processes</button></div></div>
+      <div id="procs" class="list"></div>
     </section>
     <section id="view-wu" class="view hidden">
       <div class="card"><h3>Windows Update drivers</h3><p class="muted">Driver updates offered by Windows Update itself. Installing needs elevation.</p>

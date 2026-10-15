@@ -267,6 +267,41 @@ $('#btn-comp').onclick = async () => {
     $('#components').innerHTML = j.components.map(c => `<div class="row-item"><div><div class="t">${esc(c.name)}</div><div class="s">${esc(c.detail || '')}</div></div><div class="row"><span class="tag ${c.status === 'ok' ? 'good' : 'bad'}">${esc(c.status)}</span><a class="link" href="${esc(c.url)}" target="_blank" rel="noreferrer">Microsoft download ↗</a></div></div>`).join('');
   } catch (e) { $('#components').innerHTML = '<div class="card">Check failed: ' + esc(e.message) + '</div>'; }
 };
+$('#btn-drivers').onclick = async () => {
+  $('#driverpkgs').innerHTML = '<div class="card">Enumerating driver store…</div>';
+  try {
+    const j = await api('/api/drivers');
+    $('#drivers-msg').textContent = j.drivers.length + ' published packages.';
+    $('#driverpkgs').innerHTML = j.drivers.map((d, i) => `<div class="row-item"><div><div class="t">${esc(d.original || d.oem)} <span class="muted">${esc(d.version || '')}</span></div><div class="s">${esc(d.oem)} · ${esc(d.provider || '')} · ${esc(d.class || '')}</div></div><button class="btn" data-exp="${i}">Export</button></div>`).join('') || '<div class="card">No third-party packages.</div>';
+    state._pkgs = j.drivers;
+    document.querySelectorAll('[data-exp]').forEach(b => b.onclick = async () => {
+      const oem = state._pkgs[+b.dataset.exp].oem;
+      b.textContent = 'Exporting…';
+      try {
+        const r = await api('/api/backup-one', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ oem }) });
+        b.textContent = r.ok ? 'Done' : 'Failed';
+        $('#drivers-msg').textContent = r.ok ? 'Exported: ' + r.path : 'Failed: ' + (r.log || '');
+        loadBackups();
+      } catch (e) { b.textContent = 'Failed'; }
+    });
+  } catch (e) { $('#driverpkgs').innerHTML = '<div class="card">Failed: ' + esc(e.message) + '</div>'; }
+};
+$('#btn-procs').onclick = async () => {
+  $('#procs').innerHTML = '<div class="card">Listing…</div>';
+  try {
+    const j = await api('/api/procs');
+    $('#procs').innerHTML = j.procs.map((p, i) => `<div class="row-item"><div><div class="t">${esc(p.name)}</div><div class="s">PID ${p.pid} · ${p.mb} MB</div></div><button class="btn" data-kill="${i}">End task</button></div>`).join('');
+    state._procs = j.procs;
+    document.querySelectorAll('[data-kill]').forEach(b => b.onclick = async () => {
+      const p = state._procs[+b.dataset.kill];
+      if (!confirm('End ' + p.name + ' (PID ' + p.pid + ')? Unsaved work in it will be lost.')) return;
+      try {
+        const r = await api('/api/kill', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pid: p.pid }) });
+        b.textContent = r.ok ? 'Ended' : 'Failed';
+      } catch (e) { b.textContent = 'Failed'; }
+    });
+  } catch (e) { $('#procs').innerHTML = '<div class="card">Failed: ' + esc(e.message) + '</div>'; }
+};
 let _wu = [];
 $('#btn-wu').onclick = async () => {
   $('#wu-list').innerHTML = '<div class="card">Asking Windows Update (can take minutes)…</div>';

@@ -315,6 +315,51 @@ class SafetyTest(unittest.TestCase):
         finally:
             wu._run = real
 
+    def test_enum_drivers_parsing(self):
+        import subprocess as _sp
+        from odu import drivers as drivers_mod
+        real = _sp.run
+
+        class R:
+            returncode = 0
+            stdout = ('Published Name : oem12.inf\r\nOriginal Name : foo.inf\r\n'
+                      'Provider Name : Bar\r\nClass Name : Net\r\nDriver Version : 1.2.3\r\n'
+                      '\r\nPublished Name : oem13.inf\r\nOriginal Name : baz.inf\r\n')
+            stderr = ''
+
+        _sp.run = lambda *a, **k: R()
+        try:
+            out = drivers_mod.enum_drivers()
+            self.assertEqual(len(out), 2)
+            self.assertEqual(out[0]["oem"], "oem12.inf")
+            self.assertEqual(out[0]["version"], "1.2.3")
+        finally:
+            _sp.run = real
+
+    def test_gameboost_parsing(self):
+        import subprocess as _sp2
+        from odu import gameboost
+        real = _sp2.run
+
+        class R2:
+            returncode = 0
+            stdout = ('"chrome.exe","1234","Console","1","567,890 K"\r\n'
+                      '"svchost.exe","567","Services","0","12,000 K"\r\n'
+                      '"System","4","Services","0","100 K"\r\n')
+            stderr = ''
+
+        _sp2.run = lambda *a, **k: R2()
+        try:
+            rows = gameboost.top_processes()
+            names = [r["name"] for r in rows]
+            self.assertIn("chrome.exe", names)
+            self.assertNotIn("svchost.exe", names)
+            self.assertNotIn("System", names)
+            self.assertFalse(gameboost.kill("abc")["ok"])
+            self.assertFalse(gameboost.kill(50)["ok"])
+        finally:
+            _sp2.run = real
+
 
 if __name__ == "__main__":
     unittest.main()

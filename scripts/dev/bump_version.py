@@ -8,7 +8,7 @@ for rel in FILES:
     p = os.path.join(ROOT, rel)
     with open(p, encoding="utf-8") as f:
         text = f.read()
-    new = text.replace("0.5.0", "0.6.0")
+    new = text.replace("0.6.0", "0.7.0")
     if new != text:
         with open(p, "w", encoding="utf-8") as f:
             f.write(new)
