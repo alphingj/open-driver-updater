@@ -77,6 +77,7 @@ namespace OduApp
                     {
                         bool okAll = true;
                         string logs = "";
+                        string pubs = "";
                         foreach (Catalog.CabFile f in urls)
                         {
                             if (progress != null) progress("Downloading " + u.DeviceName + "…");
@@ -97,11 +98,17 @@ namespace OduApp
                             // Keep failed CABs for offline retry/debug; drop successes.
                             if (inst.Ok) { try { File.Delete(cab); } catch { } }
                             string pub = Ops.PublishedName(inst.Log);
-                            if (pub != "") r.Published = pub;
+                            if (pub != "") pubs += (pubs == "" ? "" : ",") + pub;
                             okAll = okAll && inst.Ok;
                             logs += (inst.Path != "" ? inst.Path + " :: " : "") + inst.Log + " ||| ";
                         }
                         r.Ok = okAll;
+                        r.Published = pubs;
+                        if (okAll && pubs != "")
+                        {
+                            foreach (string p in pubs.Split(','))
+                                Store.RecordInstall(p, u.InstanceId, u.DeviceName);
+                        }
                         r.Detail = logs.Length > 2000 ? logs.Substring(logs.Length - 2000) : logs;
                     }
                 }

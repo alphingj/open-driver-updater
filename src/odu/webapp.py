@@ -121,7 +121,7 @@ def _job_run(items: list[dict]) -> None:
                 if not urls:
                     res["detail"] = "no CAB published for this update"
                 else:
-                    ok_all, logs, published = True, [], ""
+                    ok_all, logs, published = True, [], []
                     n_files = len(urls)
                     for n, u in enumerate(urls, 1):
                         with _JOB_LOCK:
@@ -137,12 +137,16 @@ def _job_run(items: list[dict]) -> None:
                         inst = installer_mod.install_cab(cab, arch)
                         ok_all = ok_all and bool(inst.get("ok"))
                         if inst.get("published"):
-                            published = inst["published"]
+                            published.append(inst["published"])
                         logs.append(str(inst.get("inf", "")) + " :: "
                                     + str(inst.get("log", ""))[-200:])
                     res["ok"] = ok_all
-                    res["published"] = published
+                    res["published"] = ",".join(published)
                     res["detail"] = " ||| ".join(logs)[-2000:]
+                    if ok_all and published:
+                        from odu import store as store_mod
+                        for oem in published:
+                            store_mod.record_install(oem, it.get("instance_id", ""), name)
             except Exception as e:  # keep going through the queue
                 res["detail"] = str(e)[-300:]
             with _JOB_LOCK:
@@ -240,11 +244,6 @@ class Handler(SimpleHTTPRequestHandler):
                 from odu import gameboost
                 return self._json({"procs": gameboost.top_processes()})
             return super().do_GET()
-            if parsed.path == "/api/cancel":
-                with _JOB_LOCK:
-                    JOB["cancel"] = True
-                return self._json({"ok": True})
-            return super().do_GET()
         except (BrokenPipeError, ConnectionResetError):
             pass
 
@@ -271,9 +270,10 @@ class Handler(SimpleHTTPRequestHandler):
             from odu import backup
             dest = data.get("dest") or os.path.join(os.path.expanduser("~"), "odu-backup")
             return self._json(backup.backup_all(str(dest)))
-        if parsed.path == "/api/install":
-            from odu import installer as installer_mod
-            return self._json(installer_mod.install_inf(str(data.get("path", ""))))
+        if parsed.path == "/api/cancel":
+            with _JOB_LOCK:
+                JOB["cancel"] = True
+            return self._json({"ok": True})
         if parsed.path == "/api/exclusions/add":
             from odu import store
             store.add_exclusion(str(data.get("hwid", "")))
@@ -304,7 +304,21 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json({"ok": True, "total": len(items)})
         if parsed.path == "/api/rollback":
             from odu import installer as installer_mod
-            return self._json(installer_mod.rollback_driver(str(data.get("published", ""))))
+            from odu import store as store_mod
+            oems = [o.strip() for o in str(data.get("published", "")).split(",") if o.strip()]
+            # Only packages THIS app installed may be rolled back.
+            alien = [o for o in oems if not store_mod.installed_by_odu(o)]
+            if alien:
+                return self._json({"ok": False,
+                                    "log": "refusing: not installed by this app: "
+                                           + ", ".join(alien)}, 403)
+            outs = [installer_mod.rollback_driver(o) for o in oems]
+            ok = bool(outs) and all(o.get("ok") for o in outs)
+            if ok:
+                for o in oems:
+                    store_mod.forget_install(o)
+            return self._json({"ok": ok,
+                               "log": " | ".join(str(o.get("log", "")) for o in outs)[-2000:]})
         if parsed.path == "/api/update-one":
             with _JOB_LOCK:
                 running = JOB["running"]
@@ -329,13 +343,20 @@ class Handler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/folder-install":
             from odu import installer as installer_mod
             from odu import arch as arch_mod
+            from odu import safety as safety_mod
             folder = str(data.get("folder", ""))
             if not os.path.exists(folder):
                 return self._json({"ok": False, "log": "path does not exist"}, 400)
+            # Same safety bar as one-click installs: restore point first.
+            # (Full driver backup stays a separate explicit step here.)
+            rp = safety_mod.create_restore_point("Open Driver Updater folder install")
             if os.path.isfile(folder) and folder.lower().endswith(".cab"):
-                return self._json(installer_mod.install_cab(folder, arch_mod.native_arch()))
-            # pnputil /add-driver accepts a directory of INFs as well as one INF
-            return self._json(installer_mod.install_inf(folder))
+                out = installer_mod.install_cab(folder, arch_mod.native_arch())
+            else:
+                # pnputil /add-driver accepts a directory of INFs as well as one INF
+                out = installer_mod.install_inf(folder)
+            out["restore"] = rp.get("log", "")
+            return self._json(out)
         if parsed.path == "/api/backup-one":
             from odu import drivers as drivers_mod
             dest = data.get("dest") or os.path.join(os.path.expanduser("~"), "odu-backup")
@@ -362,7 +383,9 @@ def _app_update() -> dict:
             headers={"User-Agent": "open-driver-updater", "Accept": "application/vnd.github+json"})
         with urllib.request.urlopen(req, timeout=15) as r:
             rel = json.loads(r.read(65536).decode("utf-8", "ignore"))
-        latest = str(rel.get("tag_name", "")).lstrip("v")
+        latest = str(rel.get("tag_name", ""))
+        if latest.lower().startswith("v"):
+            latest = latest[1:]
         if latest and latest != __version__:
             body = {"current": __version__, "latest": latest,
                     "url": str(rel.get("html_url", "")), "update": True}

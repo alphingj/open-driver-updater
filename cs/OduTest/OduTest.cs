@@ -95,6 +95,17 @@ namespace OduApp
             Store.CachePut(k, v);
             Check(Store.CacheGet(k) == v, "cache-roundtrip");
 
+            // Rollback allow-list (mirrors Python odu_installs table)
+            string oemKey = "oem199998.inf";
+            Store.ForgetInstall(oemKey);
+            Check(!Store.IsRecorded(oemKey), "rb-absent");
+            Store.RecordInstall(oemKey, "ID1", "Dev");
+            Check(Store.IsRecorded("OEM199998.INF"), "rb-recorded");
+            Store.RecordInstall("not-an-oem", "ID1", "Dev");
+            Check(!Store.IsRecorded("not-an-oem"), "rb-reject");
+            Store.ForgetInstall(oemKey);
+            Check(!Store.IsRecorded(oemKey), "rb-forgot");
+
             // NativeScan.Parse tolerance
             var devs = NativeScan.Parse("[{\"instance_id\":\"X\",\"hwid\":[\"A\"],\"problem_code\":7}]");
             Check(devs.Count == 1 && devs[0].Status == "OK" && devs[0].ProblemCode == 7, "parse-minimal");

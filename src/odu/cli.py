@@ -35,7 +35,7 @@ def cmd_update_all(args) -> int:
                           "error": "no live Catalog updates found"}, indent=2))
         return 1
     _job_run(items)
-    print(json.dumps({"ok": True, "backup": JOB.get("backup"),
+    print(json.dumps({"ok": True, "restore": JOB.get("restore"), "backup": JOB.get("backup"),
                       "results": JOB.get("results")}, indent=2))
     return 0 if all(r.get("ok") for r in JOB.get("results", [])) else 1
 

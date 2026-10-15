@@ -173,5 +173,65 @@ namespace OduApp
             out_.Reverse();
             return out_;
         }
+
+        // Packages THIS app installed (rollback allow-list). One oem per line:
+        // oem<TAB>instance-id<TAB>name<TAB>epoch.
+        public static void RecordInstall(string oem, string instanceId, string name)
+        {
+            oem = (oem ?? "").Trim().ToLowerInvariant();
+            if (!System.Text.RegularExpressions.Regex.IsMatch(oem, "^oem\\d+\\.inf$")) return;
+            lock (FileLock)
+            {
+                try
+                {
+                    var keep = new List<string>();
+                    string cur = Read("installs.log");
+                    if (cur != null)
+                    {
+                        foreach (string line in cur.Split(
+                            new char[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                            if (!line.StartsWith(oem + "\t")) keep.Add(line);
+                    }
+                    keep.Add(oem + "\t" + (instanceId ?? "") + "\t" + (name ?? "") + "\t" +
+                             (DateTime.UtcNow.Ticks / 10000000L));
+                    if (keep.Count > 500) keep.RemoveRange(0, keep.Count - 500);
+                    Write("installs.log", string.Join("\r\n", keep.ToArray()) + "\r\n");
+                }
+                catch { }
+            }
+        }
+
+        public static bool IsRecorded(string oem)
+        {
+            oem = (oem ?? "").Trim().ToLowerInvariant();
+            string t = Read("installs.log");
+            if (t == null) return false;
+            foreach (string line in t.Split(new char[] { '\r', '\n' },
+                                            StringSplitOptions.RemoveEmptyEntries))
+                if (line.StartsWith(oem + "\t")) return true;
+            return false;
+        }
+
+        public static void ForgetInstall(string oem)
+        {
+            oem = (oem ?? "").Trim().ToLowerInvariant();
+            lock (FileLock)
+            {
+                try
+                {
+                    var keep = new List<string>();
+                    string cur = Read("installs.log");
+                    if (cur != null)
+                    {
+                        foreach (string line in cur.Split(
+                            new char[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                            if (!line.StartsWith(oem + "\t")) keep.Add(line);
+                    }
+                    Write("installs.log", string.Join("\r\n", keep.ToArray()) +
+                          (keep.Count > 0 ? "\r\n" : ""));
+                }
+                catch { }
+            }
+        }
     }
 }

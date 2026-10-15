@@ -10,6 +10,8 @@ _SCHEMA = (
     "CREATE TABLE IF NOT EXISTS exclusions(hwid TEXT PRIMARY KEY)",
     "CREATE TABLE IF NOT EXISTS catalog_cache(hwid TEXT PRIMARY KEY, result TEXT,"
     " fetched REAL)",
+    "CREATE TABLE IF NOT EXISTS odu_installs(oem TEXT PRIMARY KEY,"
+    " instance_id TEXT, name TEXT, created REAL)",
 )
 
 
@@ -71,6 +73,36 @@ def list_backups(db: str | None = None) -> list[dict]:
     try:
         return [dict(id=r[0], created=r[1], instance_id=r[2], name=r[3], path=r[4])
                 for r in con.execute("SELECT id,created,instance_id,name,path FROM backups ORDER BY id DESC")]
+    finally:
+        con.close()
+
+
+def record_install(oem: str, instance_id: str, name: str, db: str | None = None) -> None:
+    """Remember a driver package THIS app installed (rollback allow-list)."""
+    con = connect(db)
+    try:
+        con.execute("INSERT OR REPLACE INTO odu_installs(oem,instance_id,name,created)"
+                    " VALUES(?,?,?,?)", (oem.lower(), instance_id, name, time.time()))
+        con.commit()
+    finally:
+        con.close()
+
+
+def forget_install(oem: str, db: str | None = None) -> None:
+    con = connect(db)
+    try:
+        con.execute("DELETE FROM odu_installs WHERE oem=?", (oem.lower(),))
+        con.commit()
+    finally:
+        con.close()
+
+
+def installed_by_odu(oem: str, db: str | None = None) -> bool:
+    con = connect(db)
+    try:
+        row = con.execute("SELECT oem FROM odu_installs WHERE oem=?",
+                          (oem.lower(),)).fetchone()
+        return row is not None
     finally:
         con.close()
 

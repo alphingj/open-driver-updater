@@ -904,8 +904,24 @@ namespace OduApp
                     var rb = new Button { Content = "Rollback", Margin = new Thickness(8, 0, 0, 0) };
                     rb.Click += delegate
                     {
-                        OpResult r = Ops.RollbackDriver(jj.Published);
-                        MessageBox.Show(r.Ok ? "Rolled back " + jj.Published + "." : "Rollback failed: " + r.Log,
+                        bool okAll = true;
+                        string log = "";
+                        foreach (string part in jj.Published.Split(','))
+                        {
+                            string oem = part.Trim();
+                            if (!Store.IsRecorded(oem))
+                            {
+                                okAll = false;
+                                log = "refusing: not installed by this app: " + oem;
+                                break;
+                            }
+                            OpResult r = Ops.RollbackDriver(oem);
+                            okAll = okAll && r.Ok;
+                            log = r.Log;
+                            if (r.Ok) Store.ForgetInstall(oem);
+                        }
+                        MessageBox.Show(okAll ? "Rolled back " + jj.Published + "."
+                                              : "Rollback failed: " + log,
                                         "Open Driver Updater");
                     };
                     row.Children.Add(rb);

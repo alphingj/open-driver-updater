@@ -390,5 +390,28 @@ class SafetyTest(unittest.TestCase):
             safety._recent_restore_point = real_recent
 
 
+    def test_rollback_accepts_single_only(self):
+        from odu import installer
+        # comma-joined published names are split by the API layer; the primitive
+        # still refuses anything that is not exactly one oem name
+        self.assertFalse(installer.rollback_driver("oem1.inf,oem2.inf")["ok"])
+        self.assertFalse(installer.rollback_driver("")["ok"])
+
+    def test_install_registry(self):
+        import tempfile
+        from odu import store
+        with tempfile.TemporaryDirectory() as d:
+            db = os.path.join(d, "t.db")
+            os.environ["ODU_DB"] = db
+            try:
+                self.assertFalse(store.installed_by_odu("oem9.inf"))
+                store.record_install("oem9.inf", "ID1", "Dev")
+                self.assertTrue(store.installed_by_odu("OEM9.INF"))
+                store.forget_install("oem9.inf")
+                self.assertFalse(store.installed_by_odu("oem9.inf"))
+            finally:
+                del os.environ["ODU_DB"]
+
+
 if __name__ == "__main__":
     unittest.main()
