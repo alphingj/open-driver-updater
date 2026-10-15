@@ -43,6 +43,7 @@ namespace OduApp
         private List<DriverUpdate> _updates = new List<DriverUpdate>();
         private bool _live;
         private string _view = "Overview";
+        private CheckBox _liveBox;
         private StackPanel _content;
         private TextBlock _status;
         private TextBlock _pill;
@@ -109,16 +110,16 @@ namespace OduApp
             scan.Click += delegate { Refresh(_live); };
             DockPanel.SetDock(scan, Dock.Right);
             top.Children.Add(scan);
-            var live = new CheckBox
+            _liveBox = new CheckBox
             {
                 Content = "Live Catalog", VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 12, 0), Foreground = new SolidColorBrush(Pal.Ink()),
                 ToolTip = "Contact Microsoft Update Catalog: finds outdated drivers too (takes a minute or two)."
             };
-            live.Checked += delegate { _live = true; };
-            live.Unchecked += delegate { _live = false; };
-            DockPanel.SetDock(live, Dock.Right);
-            top.Children.Add(live);
+            _liveBox.Checked += delegate { _live = true; };
+            _liveBox.Unchecked += delegate { _live = false; };
+            DockPanel.SetDock(_liveBox, Dock.Right);
+            top.Children.Add(_liveBox);
             DockPanel.SetDock(top, Dock.Top);
             right.Children.Add(top);
 
@@ -792,7 +793,21 @@ namespace OduApp
                     if (u.UpdateId != "" && (u.Confidence ?? "high") == "high") live.Add(u);
                 if (live.Count == 0)
                 {
-                    MessageBox.Show("Run a Live Catalog scan first.", "Open Driver Updater");
+                    if (!_live)
+                    {
+                        // The usual cause: plain scan has no installable payloads.
+                        // Offer to run the live scan right away.
+                        if (MessageBox.Show("No installable updates yet — that needs a Live Catalog scan. Run it now? (takes a minute or two)",
+                                "Open Driver Updater", MessageBoxButton.YesNo) == MessageBoxResult.Yes)
+                        {
+                            _live = true;
+                            if (_liveBox != null) _liveBox.IsChecked = true;
+                            Refresh(true);
+                        }
+                        return;
+                    }
+                    MessageBox.Show("Live scan found nothing installable. Check your connection, or everything is already current.",
+                                    "Open Driver Updater");
                     return;
                 }
             }

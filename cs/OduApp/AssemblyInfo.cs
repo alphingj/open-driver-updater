@@ -5,5 +5,5 @@ using System.Reflection;
 [assembly: AssemblyCompany("open-driver-updater contributors")]
 [assembly: AssemblyProduct("Open Driver Updater")]
 [assembly: AssemblyCopyright("MIT License")]
-[assembly: AssemblyVersion("0.7.3.0")]
-[assembly: AssemblyFileVersion("0.7.3.0")]
+[assembly: AssemblyVersion("0.7.4.0")]
+[assembly: AssemblyFileVersion("0.7.4.0")]

@@ -203,7 +203,17 @@ async function startJob(updates) {
 }
 $('#btn-update-all').onclick = async () => {
   const live = state.updates.filter(u => u.update_id && (u.confidence || 'high') === 'high');
-  if (!live.length) { $('#job-msg').textContent = 'Run a Live Catalog scan first.'; return; }
+  if (!live.length) {
+    if (!$('#live').checked) {
+      if (confirm('No installable updates yet — that needs a Live Catalog scan. Run it now? (takes a minute or two)')) {
+        $('#live').checked = true;
+        scan();
+      }
+      return;
+    }
+    $('#job-msg').textContent = 'Live scan found nothing installable — check connection, or everything is current.';
+    return;
+  }
   startJob(live);
 };
 $('#btn-update-sel').onclick = async () => startJob(selectedUpdates(true));

@@ -15,10 +15,10 @@ BEGIN
     BEGIN
       VALUE "CompanyName", "open-driver-updater contributors"
       VALUE "FileDescription", "Open Driver Updater device scanner"
-      VALUE "FileVersion", "0.7.3"
+      VALUE "FileVersion", "0.7.4"
       VALUE "InternalName", "odu_scan"
       VALUE "ProductName", "Open Driver Updater"
-      VALUE "ProductVersion", "0.7.3"
+      VALUE "ProductVersion", "0.7.4"
     END
   END
   BLOCK "VarFileInfo"
