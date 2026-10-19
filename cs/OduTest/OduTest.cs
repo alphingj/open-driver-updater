@@ -103,8 +103,18 @@ namespace OduApp
             Check(Store.IsRecorded("OEM199998.INF"), "rb-recorded");
             Store.RecordInstall("not-an-oem", "ID1", "Dev");
             Check(!Store.IsRecorded("not-an-oem"), "rb-reject");
+            // previous-driver metadata survives the round trip
+            Store.RecordInstall(oemKey, "ID1", "Dev", "OEM5.INF", "1.2.3", @"C:\b");
+            Store.InstallRow row = Store.InstallInfo("oem199998.inf");
+            Check(row != null && row.PrevOem == "oem5.inf" && row.PrevVersion == "1.2.3"
+                  && row.PrevPath == @"C:\b", "rb-prev-roundtrip");
+            // older lines (4 fields) still parse with empty prev fields
+            Check(Store.InstallInfo("oem199990.inf") == null, "rb-info-absent");
             Store.ForgetInstall(oemKey);
             Check(!Store.IsRecorded(oemKey), "rb-forgot");
+            Check(Ops.ParseCurrentInf("Driver Name: oem15.inf\r\nExtension Driver Names: oem16.inf")
+                  == "oem15.inf", "rb-parse-current");
+            Check(Ops.ParseCurrentInf("in-box only") == "", "rb-parse-current-empty");
 
             // NativeScan.Parse tolerance
             var devs = NativeScan.Parse("[{\"instance_id\":\"X\",\"hwid\":[\"A\"],\"problem_code\":7}]");

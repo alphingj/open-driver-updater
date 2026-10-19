@@ -265,7 +265,10 @@ namespace OduApp
                 r.Log = "refusing: not an oem name";
                 return r;
             }
-            string dest = Path.Combine(destRoot, oem + "-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
+            string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss-fff");
+            string dest = Path.Combine(destRoot, oem + "-" + stamp);
+            for (int n = 2; Directory.Exists(dest); n++)
+                dest = Path.Combine(destRoot, oem + "-" + stamp + "-" + n);
             try { Directory.CreateDirectory(dest); }
             catch (Exception e) { r.Ok = false; r.Log = e.Message; return r; }
             r = Run(ArchUtil.Tool("pnputil.exe"), "/export-driver " + oem + " \"" + dest + "\"", 5 * 60 * 1000);
@@ -362,6 +365,13 @@ namespace OduApp
 
         public static OpResult RollbackDriver(string published)
         {
+            return RollbackDriver(published, "", "");
+        }
+
+        // Remove the package we installed, then re-install the exported package
+        // that was bound to the device before the upgrade (true rollback).
+        public static OpResult RollbackDriver(string published, string prevOem, string prevPath)
+        {
             var r = new OpResult();
             string oem = (published ?? "").Trim().ToLowerInvariant();
             if (!System.Text.RegularExpressions.Regex.IsMatch(oem, "^oem\\d+\\.inf$"))
@@ -370,8 +380,62 @@ namespace OduApp
                 r.Log = "refusing: not a recorded oem name";
                 return r;
             }
-            return Run(ArchUtil.Tool("pnputil.exe"), "/delete-driver " + oem + " /uninstall",
-                       10 * 60 * 1000);
+            OpResult del = Run(ArchUtil.Tool("pnputil.exe"),
+                               "/delete-driver " + oem + " /uninstall", 10 * 60 * 1000);
+            if (!del.Ok) return del;
+            if (string.IsNullOrEmpty(prevOem) || string.IsNullOrEmpty(prevPath))
+                return del;
+            string inf = ExportedInf(prevPath);
+            if (inf == "")
+            {
+                del.Log = (del.Log ?? "") + "\nprevious driver was not found at " + prevPath;
+                return del;
+            }
+            OpResult add = Run(ArchUtil.Tool("pnputil.exe"),
+                               "/add-driver \"" + inf + "\" /install", 10 * 60 * 1000);
+            var m = new OpResult();
+            m.Ok = add.Ok;
+            m.Path = inf;
+            m.Log = (add.Ok ? "restored " + prevOem.ToLowerInvariant() + "\n" : "") +
+                    (del.Log ?? "") + "\n--- restore " + prevOem + " ---\n" + (add.Log ?? "");
+            return m;
+        }
+
+        // First .inf inside a pnputil /export-driver folder ("" if none).
+        public static string ExportedInf(string folder)
+        {
+            try
+            {
+                if (Directory.Exists(folder))
+                {
+                    string[] files = Directory.GetFiles(folder, "*.inf", SearchOption.AllDirectories);
+                    if (files.Length > 0) return files[0];
+                }
+            }
+            catch { }
+            return "";
+        }
+
+        // Published oemNN.inf currently bound to a device ("" if none/in-box).
+        public static string CurrentInf(string instanceId)
+        {
+            if (string.IsNullOrEmpty(instanceId)) return "";
+            OpResult r = Run(ArchUtil.Tool("pnputil.exe"),
+                             "/enum-devices /instanceid \"" + instanceId + "\" /drivers",
+                             60000);
+            if (!r.Ok) return "";
+            return ParseCurrentInf(r.Log);
+        }
+
+        // The active "Driver Name" is printed before extension/matching drivers,
+        // so the first oem token is the package bound to the device.
+        public static string ParseCurrentInf(string text)
+        {
+            System.Text.RegularExpressions.Match m =
+                System.Text.RegularExpressions.Regex.Match(text ?? "",
+                    "\\b(oem\\d+\\.inf)\\b",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            return m.Success ? m.Groups[1].Value.ToLowerInvariant() : "";
         }
 
         public static string PublishedName(string log)

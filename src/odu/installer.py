@@ -133,21 +133,60 @@ def _published_name(log: str) -> str:
     return m.group(1).lower() if m else ""
 
 
-def rollback_driver(published: str) -> dict:
-    """Remove a driver we installed (pnputil /delete-driver oemNN /uninstall).
+def _exported_inf(folder: str) -> str:
+    """First .inf inside a pnputil /export-driver folder ("" if none)."""
+    try:
+        for root, _, files in os.walk(folder):
+            for fn in files:
+                if fn.lower().endswith(".inf"):
+                    return os.path.join(root, fn)
+    except Exception:
+        pass
+    return ""
 
-    Windows falls back to the previously installed driver. Only call with
-    published names recorded by install_cab/install_inf.
+
+def rollback_driver(published: str, prev_oem: str = "", prev_path: str = "") -> dict:
+    """Remove a driver we installed and restore the one it replaced.
+
+    ``prev_oem``/``prev_path`` come from the recorded install row: the exported
+    package that was bound to the device before the upgrade. When they are
+    present the old INF is re-added and installed, so the device ends up on the
+    previous version instead of being left to Windows' default fallback.
+
+    Only call with published names recorded by install_cab/install_inf.
     """
     import re
     if not re.fullmatch(r"oem\d+\.inf", (published or "").lower()):
-        return {"ok": False, "log": "refusing: not a recorded oem name"}
-    cmd = [pnputil_path(), "/delete-driver", published.lower(), "/uninstall"]
+        return {"ok": False, "log": "refusing: not a recorded oem name",
+                "restored": ""}
+    pub = published.lower()
+    cmd = [pnputil_path(), "/delete-driver", pub, "/uninstall"]
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        return {"ok": p.returncode == 0, "log": (p.stdout + p.stderr)[-2000:]}
+        log = (p.stdout + p.stderr)[-2000:]
     except Exception as e:
-        return {"ok": False, "log": str(e)}
+        return {"ok": False, "log": str(e), "restored": ""}
+    if p.returncode != 0:
+        return {"ok": False, "log": log, "restored": ""}
+    restored = ""
+    if prev_oem and prev_path:
+        inf = _exported_inf(prev_path)
+        if not inf:
+            log += f"\nprevious driver {prev_oem} was not found at {prev_path}"
+            return {"ok": True, "log": log[-2000:], "restored": ""}
+        try:
+            q = subprocess.run([pnputil_path(), "/add-driver", inf, "/install"],
+                               capture_output=True, text=True, timeout=600)
+            relog = (q.stdout + q.stderr)[-2000:]
+            log = (log + "\n--- restore " + prev_oem.lower() + " ---\n" + relog)[-4000:]
+            if q.returncode != 0:
+                return {"ok": False, "log": log, "restored": ""}
+            restored = prev_oem.lower()
+        except Exception as e:
+            return {"ok": False,
+                    "log": (log + "\nrestore failed: " + str(e))[-2000:],
+                    "restored": ""}
+    return {"ok": True, "log": log[-2000:], "restored": restored}
 
 
 def install_cab(cab: str, arch: str | None = None, workdir: str | None = None,

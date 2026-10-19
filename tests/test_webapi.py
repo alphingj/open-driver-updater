@@ -103,6 +103,17 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertIsInstance(j["backups"], list)
 
+    def test_installs_endpoint(self):
+        code, j = _req("GET", "/api/installs")
+        self.assertEqual(code, 200)
+        self.assertIsInstance(j["installs"], list)
+
+    def test_rollback_refuses_unknown(self):
+        code, j = _req("POST", "/api/rollback", {"published": "oem999998.inf"})
+        self.assertEqual(code, 403)
+        self.assertFalse(j["ok"])
+        self.assertIn("not installed by this app", j["log"])
+
     def test_exclusions_round_trip(self):
         # empty initially
         code, j = _req("GET", "/api/exclusions")

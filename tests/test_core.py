@@ -413,5 +413,122 @@ class SafetyTest(unittest.TestCase):
                 del os.environ["ODU_DB"]
 
 
+class RollbackTest(unittest.TestCase):
+    def test_parse_current_inf(self):
+        from odu.drivers import parse_current_inf
+        text = (
+            "Microsoft PnP Utility\n\n"
+            "Instance ID:                PCI\\VEN_1002&DEV_1506\n"
+            "Driver Name:                oem15.inf\n"
+            "Extension Driver Names:     oem16.inf\n"
+            "Matching Drivers:\n"
+            "    Driver Name:            oem15.inf\n")
+        self.assertEqual(parse_current_inf(text), "oem15.inf")
+        self.assertEqual(parse_current_inf("in-box driver only"), "")
+        self.assertEqual(parse_current_inf(""), "")
+
+    def test_install_info_round_trip(self):
+        import tempfile
+        from odu import store
+        with tempfile.TemporaryDirectory() as d:
+            db = os.path.join(d, "t.db")
+            store.record_install("oem42.inf", "ID2", "Dev", db=db,
+                                 prev_oem="oem15.inf", prev_version="32.0.1",
+                                 prev_path=os.path.join(d, "backup"))
+            info = store.install_info("OEM42.INF", db=db)
+            self.assertEqual(info["prev_oem"], "oem15.inf")
+            self.assertEqual(info["prev_version"], "32.0.1")
+            self.assertEqual(info["instance_id"], "ID2")
+            self.assertEqual(len(store.list_installs(db=db)), 1)
+            self.assertIsNone(store.install_info("oem99.inf", db=db))
+
+    def test_install_migration_from_old_schema(self):
+        import sqlite3
+        import tempfile
+        from odu import store
+        with tempfile.TemporaryDirectory() as d:
+            db = os.path.join(d, "old.db")
+            con = sqlite3.connect(db)
+            con.execute("CREATE TABLE odu_installs(oem TEXT PRIMARY KEY,"
+                        " instance_id TEXT, name TEXT, created REAL)")
+            con.execute("INSERT INTO odu_installs VALUES('oem7.inf','ID7','Dev',1.0)")
+            con.commit()
+            con.close()
+            # connect() adds the new columns without losing the allow-list.
+            info = store.install_info("oem7.inf", db=db)
+            self.assertIsNotNone(info)
+            self.assertEqual(info["prev_oem"], "")
+            self.assertTrue(store.installed_by_odu("oem7.inf", db=db))
+            store.record_install("oem7.inf", "ID7", "Dev", db=db,
+                                 prev_oem="oem3.inf")
+            self.assertEqual(store.install_info("oem7.inf", db=db)["prev_oem"],
+                             "oem3.inf")
+
+    def test_exported_inf(self):
+        import tempfile
+        from odu.installer import _exported_inf
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(_exported_inf(d), "")
+            with open(os.path.join(d, "x.inf"), "w") as f:
+                f.write("[Version]\n")
+            self.assertTrue(_exported_inf(d).lower().endswith(".inf"))
+
+    def test_export_dir_is_unique(self):
+        import tempfile
+        from odu.drivers import _export_dir
+        with tempfile.TemporaryDirectory() as d:
+            a = _export_dir(d, "oem12.inf")
+            os.makedirs(a)
+            b = _export_dir(d, "oem12.inf")
+            self.assertNotEqual(a, b)
+            self.assertTrue(b.startswith(os.path.join(d, "oem12.inf-")))
+            self.assertFalse(os.path.exists(b))
+
+    def test_rollback_restores_previous(self):
+        import tempfile
+        from odu import installer
+        calls = []
+
+        class P:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+
+        real = installer.subprocess.run
+        installer.subprocess.run = lambda cmd, **k: (calls.append(cmd), P())[1]
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                with open(os.path.join(d, "prev.inf"), "w") as f:
+                    f.write("[Version]\n")
+                r = installer.rollback_driver("oem99.inf", "oem15.inf", d)
+            self.assertTrue(r["ok"])
+            self.assertEqual(r["restored"], "oem15.inf")
+            self.assertEqual(len(calls), 2)
+            self.assertIn("/delete-driver", calls[0])
+            self.assertIn("/add-driver", calls[1])
+            self.assertTrue(any(str(c).lower().endswith("prev.inf") for c in calls[1]))
+        finally:
+            installer.subprocess.run = real
+
+    def test_rollback_missing_prev_export(self):
+        from odu import installer
+
+        class P:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+
+        real = installer.subprocess.run
+        installer.subprocess.run = lambda cmd, **k: P()
+        try:
+            r = installer.rollback_driver("oem99.inf", "oem15.inf",
+                                          os.path.join(os.getcwd(), "no-such-dir"))
+            self.assertTrue(r["ok"])        # the new driver was still removed
+            self.assertEqual(r["restored"], "")
+            self.assertIn("not found", r["log"])
+        finally:
+            installer.subprocess.run = real
+
+
 if __name__ == "__main__":
     unittest.main()

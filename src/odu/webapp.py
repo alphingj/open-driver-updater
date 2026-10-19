@@ -70,6 +70,7 @@ def _job_run(items: list[dict]) -> None:
     from odu import arch as arch_mod
     from odu import backup as backup_mod
     from odu import catalog as catalog_mod
+    from odu import drivers as drivers_mod
     from odu import installer as installer_mod
     from odu import safety as safety_mod
     with _JOB_LOCK:
@@ -114,6 +115,16 @@ def _job_run(items: list[dict]) -> None:
             res: dict = {"device": name, "hwid": it.get("hwid", ""),
                          "ok": False, "detail": ""}
             try:
+                # Capture the currently bound package before upgrading so a
+                # rollback can restore that exact version instead of deleting
+                # the new one and leaving the device on Windows' default.
+                prev = {"oem": "", "path": ""}
+                if it.get("instance_id"):
+                    with _JOB_LOCK:
+                        JOB["current"] = f"Saving current driver for {name}…"
+                    prev = drivers_mod.capture_previous(
+                        it["instance_id"],
+                        os.path.join(os.path.expanduser("~"), "odu-backup"))
                 with _JOB_LOCK:
                     JOB["current"] = f"Resolving {name}…"
                 urls = catalog_mod.get_download_urls(it.get("update_id", ""),
@@ -146,7 +157,10 @@ def _job_run(items: list[dict]) -> None:
                     if ok_all and published:
                         from odu import store as store_mod
                         for oem in published:
-                            store_mod.record_install(oem, it.get("instance_id", ""), name)
+                            store_mod.record_install(
+                                oem, it.get("instance_id", ""), name,
+                                prev_oem=prev.get("oem", ""),
+                                prev_path=prev.get("path", ""))
             except Exception as e:  # keep going through the queue
                 res["detail"] = str(e)[-300:]
             with _JOB_LOCK:
@@ -218,6 +232,9 @@ class Handler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/backups":
                 from odu import store
                 return self._json({"backups": store.list_backups()})
+            if parsed.path == "/api/installs":
+                from odu import store
+                return self._json({"installs": store.list_installs()})
             if parsed.path == "/api/exclusions":
                 from odu import store
                 return self._json({"exclusions": store.get_exclusions()})
@@ -312,13 +329,24 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json({"ok": False,
                                     "log": "refusing: not installed by this app: "
                                            + ", ".join(alien)}, 403)
-            outs = [installer_mod.rollback_driver(o) for o in oems]
+            outs, restored = [], []
+            for o in oems:
+                info = store_mod.install_info(o) or {}
+                out = installer_mod.rollback_driver(
+                    o, prev_oem=info.get("prev_oem", ""),
+                    prev_path=info.get("prev_path", ""))
+                outs.append(out)
+                if out.get("restored"):
+                    restored.append(out["restored"])
             ok = bool(outs) and all(o.get("ok") for o in outs)
             if ok:
                 for o in oems:
                     store_mod.forget_install(o)
-            return self._json({"ok": ok,
-                               "log": " | ".join(str(o.get("log", "")) for o in outs)[-2000:]})
+            detail = " | ".join(str(o.get("log", "")) for o in outs)[-2000:]
+            if restored:
+                detail = "restored " + ", ".join(restored) + "\n" + detail
+            return self._json({"ok": ok, "restored": restored,
+                               "log": detail})
         if parsed.path == "/api/update-one":
             with _JOB_LOCK:
                 running = JOB["running"]

@@ -11,8 +11,25 @@ _SCHEMA = (
     "CREATE TABLE IF NOT EXISTS catalog_cache(hwid TEXT PRIMARY KEY, result TEXT,"
     " fetched REAL)",
     "CREATE TABLE IF NOT EXISTS odu_installs(oem TEXT PRIMARY KEY,"
-    " instance_id TEXT, name TEXT, created REAL)",
+    " instance_id TEXT, name TEXT, created REAL,"
+    " prev_oem TEXT, prev_version TEXT, prev_path TEXT)",
 )
+
+# Added after v0.7.4: older databases lack these columns, so migrate in place
+# instead of dropping the rollback allow-list.
+_INSTALL_MIGRATIONS = (("prev_oem", "TEXT"), ("prev_version", "TEXT"),
+                       ("prev_path", "TEXT"))
+
+
+def _migrate(con: sqlite3.Connection) -> None:
+    try:
+        cols = {row[1] for row in con.execute("PRAGMA table_info(odu_installs)")}
+        for name, typ in _INSTALL_MIGRATIONS:
+            if name not in cols:
+                con.execute(f"ALTER TABLE odu_installs ADD COLUMN {name} {typ}")
+        con.commit()
+    except sqlite3.Error:
+        pass
 
 
 def db_path(path: str | None = None) -> str:
@@ -26,6 +43,7 @@ def connect(path: str | None = None) -> sqlite3.Connection:
     con = sqlite3.connect(db_path(path), timeout=30)
     for stmt in _SCHEMA:
         con.execute(stmt)
+    _migrate(con)
     return con
 
 
@@ -77,13 +95,39 @@ def list_backups(db: str | None = None) -> list[dict]:
         con.close()
 
 
-def record_install(oem: str, instance_id: str, name: str, db: str | None = None) -> None:
-    """Remember a driver package THIS app installed (rollback allow-list)."""
+def record_install(oem: str, instance_id: str, name: str, db: str | None = None,
+                   prev_oem: str = "", prev_version: str = "",
+                   prev_path: str = "") -> None:
+    """Remember a driver package THIS app installed (rollback allow-list).
+
+    ``prev_oem``/``prev_version``/``prev_path`` describe the driver that was
+    bound to the device before the upgrade and are used to restore it on
+    rollback. They are optional so older callers keep working.
+    """
     con = connect(db)
     try:
-        con.execute("INSERT OR REPLACE INTO odu_installs(oem,instance_id,name,created)"
-                    " VALUES(?,?,?,?)", (oem.lower(), instance_id, name, time.time()))
+        con.execute("INSERT OR REPLACE INTO odu_installs"
+                    "(oem,instance_id,name,created,prev_oem,prev_version,prev_path)"
+                    " VALUES(?,?,?,?,?,?,?)",
+                    (oem.lower(), instance_id, name, time.time(),
+                     (prev_oem or "").lower(), prev_version or "", prev_path or ""))
         con.commit()
+    finally:
+        con.close()
+
+
+def install_info(oem: str, db: str | None = None) -> dict | None:
+    """Return the recorded install row for an oem name, or None."""
+    con = connect(db)
+    try:
+        row = con.execute(
+            "SELECT oem,instance_id,name,created,prev_oem,prev_version,prev_path"
+            " FROM odu_installs WHERE oem=?", (oem.lower(),)).fetchone()
+        if not row:
+            return None
+        return {"oem": row[0], "instance_id": row[1] or "", "name": row[2] or "",
+                "created": row[3], "prev_oem": row[4] or "",
+                "prev_version": row[5] or "", "prev_path": row[6] or ""}
     finally:
         con.close()
 
@@ -103,6 +147,21 @@ def installed_by_odu(oem: str, db: str | None = None) -> bool:
         row = con.execute("SELECT oem FROM odu_installs WHERE oem=?",
                           (oem.lower(),)).fetchone()
         return row is not None
+    finally:
+        con.close()
+
+
+def list_installs(db: str | None = None) -> list[dict]:
+    """All packages this app installed, newest first (rollback candidates)."""
+    con = connect(db)
+    try:
+        rows = con.execute(
+            "SELECT oem,instance_id,name,created,prev_oem,prev_version,prev_path"
+            " FROM odu_installs ORDER BY created DESC").fetchall()
+        return [{"oem": r[0], "instance_id": r[1] or "", "name": r[2] or "",
+                 "created": r[3], "prev_oem": r[4] or "",
+                 "prev_version": r[5] or "", "prev_path": r[6] or ""}
+                for r in rows]
     finally:
         con.close()
 

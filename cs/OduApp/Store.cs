@@ -175,8 +175,14 @@ namespace OduApp
         }
 
         // Packages THIS app installed (rollback allow-list). One oem per line:
-        // oem<TAB>instance-id<TAB>name<TAB>epoch.
+        // oem<TAB>instance-id<TAB>name<TAB>epoch<TAB>prev-oem<TAB>prev-version<TAB>prev-path.
         public static void RecordInstall(string oem, string instanceId, string name)
+        {
+            RecordInstall(oem, instanceId, name, "", "", "");
+        }
+
+        public static void RecordInstall(string oem, string instanceId, string name,
+                                         string prevOem, string prevVersion, string prevPath)
         {
             oem = (oem ?? "").Trim().ToLowerInvariant();
             if (!System.Text.RegularExpressions.Regex.IsMatch(oem, "^oem\\d+\\.inf$")) return;
@@ -193,12 +199,49 @@ namespace OduApp
                             if (!line.StartsWith(oem + "\t")) keep.Add(line);
                     }
                     keep.Add(oem + "\t" + (instanceId ?? "") + "\t" + (name ?? "") + "\t" +
-                             (DateTime.UtcNow.Ticks / 10000000L));
+                             (DateTime.UtcNow.Ticks / 10000000L) + "\t" +
+                             (prevOem ?? "").Trim().ToLowerInvariant() + "\t" +
+                             (prevVersion ?? "") + "\t" + (prevPath ?? ""));
                     if (keep.Count > 500) keep.RemoveRange(0, keep.Count - 500);
                     Write("installs.log", string.Join("\r\n", keep.ToArray()) + "\r\n");
                 }
                 catch { }
             }
+        }
+
+        public class InstallRow
+        {
+            public string Oem = "";
+            public string InstanceId = "";
+            public string Name = "";
+            public string PrevOem = "";
+            public string PrevVersion = "";
+            public string PrevPath = "";
+        }
+
+        // Recorded install for an oem name, or null. Older lines written before
+        // the previous-driver columns existed have fewer fields and still parse.
+        public static InstallRow InstallInfo(string oem)
+        {
+            oem = (oem ?? "").Trim().ToLowerInvariant();
+            string t = Read("installs.log");
+            if (t == null) return null;
+            foreach (string line in t.Split(new char[] { '\r', '\n' },
+                                            StringSplitOptions.RemoveEmptyEntries))
+            {
+                string[] p = line.Split('\t');
+                if (p.Length < 1 || !p[0].Equals(oem, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                var row = new InstallRow();
+                row.Oem = p[0];
+                if (p.Length > 1) row.InstanceId = p[1];
+                if (p.Length > 2) row.Name = p[2];
+                if (p.Length > 4) row.PrevOem = p[4];
+                if (p.Length > 5) row.PrevVersion = p[5];
+                if (p.Length > 6) row.PrevPath = p[6];
+                return row;
+            }
+            return null;
         }
 
         public static bool IsRecorded(string oem)

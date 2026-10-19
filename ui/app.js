@@ -232,10 +232,11 @@ async function pollJob() {
       + ((!s.running && s.total) ? `<div class="card"><b>${failed ? 'Finished with errors — review the log above.' : 'All updates installed.'} A restart may be required for drivers to take effect.</b></div>` : '');
     document.querySelectorAll('[data-rb]').forEach(b => b.onclick = async () => {
       const oem = b.dataset.rb;
-      if (!confirm('Roll back ' + oem + ' (' + b.dataset.dev + ')? Windows reverts to the previous driver. If the device had no driver before, it will be left without one.')) return;
+      if (!confirm('Roll back ' + oem + ' (' + b.dataset.dev + ')? This removes the driver this app installed and restores the exported previous driver when one was captured. A restart may be required.')) return;
       try {
         const j = await api('/api/rollback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ published: oem }) });
-        b.outerHTML = '<span class="tag ' + (j.ok ? 'good' : 'bad') + '">' + (j.ok ? 'rolled back' : 'failed') + '</span>';
+        const label = j.ok ? (j.restored && j.restored.length ? 'restored ' + j.restored.join(', ') : 'rolled back') : 'failed';
+        b.outerHTML = '<span class="tag ' + (j.ok ? 'good' : 'bad') + '">' + label + '</span>';
       } catch (e) { b.outerHTML = '<span class="tag bad">failed</span>'; }
     });
     if (!s.running && s.total) { clearInterval(jobTimer); scanFast(); }

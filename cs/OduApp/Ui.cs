@@ -924,6 +924,7 @@ namespace OduApp
                     {
                         bool okAll = true;
                         string log = "";
+                        bool restored = false;
                         foreach (string part in jj.Published.Split(','))
                         {
                             string oem = part.Trim();
@@ -933,12 +934,22 @@ namespace OduApp
                                 log = "refusing: not installed by this app: " + oem;
                                 break;
                             }
-                            OpResult r = Ops.RollbackDriver(oem);
+                            Store.InstallRow info = Store.InstallInfo(oem);
+                            OpResult r = info != null
+                                ? Ops.RollbackDriver(oem, info.PrevOem, info.PrevPath)
+                                : Ops.RollbackDriver(oem);
                             okAll = okAll && r.Ok;
                             log = r.Log;
-                            if (r.Ok) Store.ForgetInstall(oem);
+                            if (r.Ok)
+                            {
+                                Store.ForgetInstall(oem);
+                                if (r.Path != "") restored = true;
+                            }
                         }
                         MessageBox.Show(okAll ? "Rolled back " + jj.Published + "."
+                                              + (restored
+                                                  ? " The previous driver was restored."
+                                                  : " No previous driver was recorded; Windows' default driver applies.")
                                               : "Rollback failed: " + log,
                                         "Open Driver Updater");
                     };

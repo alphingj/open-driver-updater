@@ -24,7 +24,7 @@ Driver matching always uses the **OS** architecture (WOW64-safe), INF tags
 ## Install (recommended)
 
 ```powershell
-installer\Output\OpenDriverUpdater-Setup-0.7.4.exe
+installer\Output\OpenDriverUpdater-Setup-0.7.5.exe
 ```
 
 Per-user install, no admin needed to install: Start Menu shortcut, Add/Remove
@@ -76,8 +76,10 @@ PowerShell/CIM when the binaries are absent.
    verified), expands it, picks the arch-compatible INF, and installs via
    `pnputil` (signatures enforced by Windows). Display/GPU updates ask twice.
 4. Safety first: system restore point, then full driver backup — either failing
-   stops the queue before anything is touched. Every install records its
-   `oemNN.inf` name for one-click rollback. Reboot need is detected and shown.
+   stops the queue before anything is touched. Every install also exports the
+   driver package currently bound to the device and records it with the new
+   `oemNN.inf`, so one-click rollback both removes the new package and restores
+   the previous version. Reboot need is detected and shown.
 
 Also included: scheduled weekly scans, exclusion + skip-this-version lists,
 Windows Update driver source, game-component (VC++/DirectX) checks, offline

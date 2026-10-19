@@ -68,6 +68,22 @@ namespace OduApp
                 try
                 {
                     if (progress != null) progress("Resolving " + u.DeviceName + "…");
+                    // Capture the bound package before upgrading so rollback can
+                    // restore that exact version.
+                    string prevOem = "";
+                    string prevPath = "";
+                    if (!string.IsNullOrEmpty(u.InstanceId))
+                    {
+                        if (progress != null) progress("Saving current driver for " + u.DeviceName + "…");
+                        prevOem = Ops.CurrentInf(u.InstanceId);
+                        if (prevOem != "")
+                        {
+                            OpResult exp = Ops.ExportDriver(prevOem, Path.Combine(
+                                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                                "odu-backup"));
+                            if (exp.Ok) prevPath = exp.Path;
+                        }
+                    }
                     List<Catalog.CabFile> urls = Catalog.DownloadUrls(u.UpdateId, u.Size);
                     if (urls.Count == 0)
                     {
@@ -107,7 +123,8 @@ namespace OduApp
                         if (okAll && pubs != "")
                         {
                             foreach (string p in pubs.Split(','))
-                                Store.RecordInstall(p, u.InstanceId, u.DeviceName);
+                                Store.RecordInstall(p, u.InstanceId, u.DeviceName,
+                                                    prevOem, u.InstalledVersion, prevPath);
                         }
                         r.Detail = logs.Length > 2000 ? logs.Substring(logs.Length - 2000) : logs;
                     }
