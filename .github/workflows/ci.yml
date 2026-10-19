@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Build native scanner (MSVC x64 + x86)
+        run: native\build.bat
+        shell: pwsh
+
+      - name: Build C# desktop app (in-box csc)
+        run: cs\build.bat
+        shell: pwsh
+
+      - name: Run Python unit tests
+        run: python -m unittest discover -s tests
+
+      - name: Run C# self-test (scanner + resolver parity)
+        run: cs\bin\OduApp.exe --selftest
+        shell: pwsh
+
+      - name: Build installer (Inno Setup, best-effort)
+        run: |
+          if (Test-Path 'C:\Program Files\Inno Setup 7\ISCC.exe') {
+            & 'C:\Program Files\Inno Setup 7\ISCC.exe' installer\setup.iss
+          } else {
+            Write-Host 'Inno Setup 7 not installed on this runner; skipping installer build.'
+          }
+        shell: pwsh
