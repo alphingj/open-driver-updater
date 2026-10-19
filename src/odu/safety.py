@@ -57,6 +57,17 @@ def create_restore_point(description: str = "Open Driver Updater",
             return {"ok": True,
                     "log": "recent restore point already exists (Windows allows "
                            "one per 24 hours) — reused"}
+        low = out.lower()
+        if ("system restore is disabled" in low
+                or "not enabled on the system drive" in low
+                or "system protection is disabled" in low
+                or "0x80070422" in low):
+            # System Protection is off (common on managed/SSD-tuned PCs).
+            # Blocking every update would be worse than proceeding: the full
+            # per-driver backup still runs and rollback is per-package.
+            return {"ok": True,
+                    "log": "System Protection is disabled on this PC — restore "
+                           "point skipped; the per-driver backup still runs"}
         return {"ok": False, "log": out[-500:] or (p.stderr or "")[-500:]}
     except Exception as e:
         return {"ok": False, "log": str(e)}

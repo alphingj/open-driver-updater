@@ -41,6 +41,11 @@ def db_path(path: str | None = None) -> str:
 
 def connect(path: str | None = None) -> sqlite3.Connection:
     con = sqlite3.connect(db_path(path), timeout=30)
+    # WAL keeps the UI's polling readers from blocking the install job's writers.
+    try:
+        con.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.Error:
+        pass
     for stmt in _SCHEMA:
         con.execute(stmt)
     _migrate(con)

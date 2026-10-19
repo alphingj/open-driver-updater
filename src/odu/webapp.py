@@ -40,6 +40,9 @@ UI_DIR = _find_ui_dir()
 _GUID_RE = re.compile(r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-"
                       r"[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\Z")
 
+#: Reject absurd request bodies instead of allocating whatever a client claims.
+MAX_BODY = 8 * 1024 * 1024
+
 _JOB_LOCK = threading.Lock()
 JOB: dict = {"running": False, "total": 0, "done": 0, "current": "",
              "results": [], "started": 0.0, "backup": None, "cancel": False}
@@ -276,6 +279,9 @@ class Handler(SimpleHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or 0)
         except (TypeError, ValueError):
             length = 0
+        if length < 0 or length > MAX_BODY:
+            return self._json({"ok": False,
+                               "error": "request body too large"}, 413)
         body = self.rfile.read(length) if length > 0 else b"{}"
         try:
             data = json.loads(body or b"{}")

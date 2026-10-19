@@ -163,6 +163,21 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertTrue(j["ok"])
 
+    def test_oversized_body_rejected(self):
+        import http.client
+        conn = http.client.HTTPConnection("127.0.0.1", PORT, timeout=10)
+        try:
+            conn.putrequest("POST", "/api/cancel")
+            conn.putheader("Content-Length", str(9 * 1024 * 1024))
+            conn.putheader("Content-Type", "application/json")
+            conn.endheaders()
+            r = conn.getresponse()
+            body = json.loads(r.read().decode())
+            self.assertEqual(r.status, 413)
+            self.assertFalse(body["ok"])
+        finally:
+            conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()

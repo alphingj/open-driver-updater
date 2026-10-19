@@ -115,6 +115,9 @@ namespace OduApp
             Check(Ops.ParseCurrentInf("Driver Name: oem15.inf\r\nExtension Driver Names: oem16.inf")
                   == "oem15.inf", "rb-parse-current");
             Check(Ops.ParseCurrentInf("in-box only") == "", "rb-parse-current-empty");
+            Check(Ops.RestorePointUnavailable(
+                  "FAIL: System Restore is disabled on the system drive"), "rp-disabled");
+            Check(!Ops.RestorePointUnavailable("restore point created"), "rp-enabled");
 
             // NativeScan.Parse tolerance
             var devs = NativeScan.Parse("[{\"instance_id\":\"X\",\"hwid\":[\"A\"],\"problem_code\":7}]");

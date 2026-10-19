@@ -303,9 +303,26 @@ namespace OduApp
                         "one per 24 hours) — reused";
                 return m;
             }
+            if (RestorePointUnavailable(stdout))
+            {
+                m.Ok = true;
+                m.Log = "System Protection is disabled on this PC — restore " +
+                        "point skipped; the per-driver backup still runs";
+                return m;
+            }
             m.Ok = false;
             m.Log = stdout.Length > 500 ? stdout.Substring(stdout.Length - 500) : stdout;
             return m;
+        }
+
+        // System Protection off is common; it must not block every update.
+        public static bool RestorePointUnavailable(string stdout)
+        {
+            string s = (stdout ?? "").ToLowerInvariant();
+            return s.Contains("system restore is disabled")
+                || s.Contains("not enabled on the system drive")
+                || s.Contains("system protection is disabled")
+                || s.Contains("0x80070422");
         }
 
         // True (ok) when a restore point from the last 24h exists.

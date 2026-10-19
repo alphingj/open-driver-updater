@@ -13,7 +13,7 @@ def backup_all(dest_root: str, timeout: int = 1800) -> dict:
     A fresh subfolder is required because pnputil refuses non-empty targets.
     Can take many minutes and gigabytes; run elevated for a complete backup.
     """
-    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     dest = os.path.join(dest_root, f"full-{stamp}")
     try:
         os.makedirs(dest, exist_ok=False)

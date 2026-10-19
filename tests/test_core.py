@@ -385,6 +385,13 @@ class SafetyTest(unittest.TestCase):
             r = safety.create_restore_point()
             self.assertTrue(r["ok"])
             self.assertIn("24 hours", r["log"])
+            # System Protection disabled -> warning, not a hard failure
+            _sp.run = lambda *a, **k: R(
+                "FAIL: The system restore point could not be created. "
+                "System Restore is disabled on the system drive.")
+            r = safety.create_restore_point()
+            self.assertTrue(r["ok"])
+            self.assertIn("disabled", r["log"])
         finally:
             _sp.run = real_run
             safety._recent_restore_point = real_recent
@@ -483,6 +490,17 @@ class RollbackTest(unittest.TestCase):
             self.assertNotEqual(a, b)
             self.assertTrue(b.startswith(os.path.join(d, "oem12.inf-")))
             self.assertFalse(os.path.exists(b))
+
+    def test_wal_enabled(self):
+        import tempfile
+        from odu import store
+        with tempfile.TemporaryDirectory() as d:
+            con = store.connect(os.path.join(d, "wal.db"))
+            try:
+                mode = con.execute("PRAGMA journal_mode").fetchone()[0]
+            finally:
+                con.close()
+            self.assertEqual(str(mode).lower(), "wal")
 
     def test_rollback_restores_previous(self):
         import tempfile
