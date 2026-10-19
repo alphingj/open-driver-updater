@@ -9,4 +9,6 @@ print("reboot:", safety.reboot_pending())
 for c in components.check():
     print("component:", c["name"], c["status"], "|", c["url"][:60])
 print("rollback guard:", installer.rollback_driver("INVALID!!"))
-print("rollback guard2:", installer.rollback_driver("oem12.inf")["ok"] is False or True)
+# Never pass a real oemNN.inf here: the primitive deletes packages. A name
+# without ".inf" is rejected before pnputil runs, which is what we test.
+print("rollback guard2:", installer.rollback_driver("oem12")["ok"])

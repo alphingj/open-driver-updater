@@ -25,7 +25,10 @@ import time
 time.sleep(3)
 print("cancel ->", post("/api/cancel", {}))
 print("job ->", {k: get("/api/job")[k] for k in ("running", "total", "done")})
-print("rollback junk ->", post("/api/rollback", {"published": "oem1.inf,oem2.inf"}))
+# Guard only: a package this app never installed must be refused (403) before
+# pnputil runs. Never post a real oemNN.inf here — rollback deletes packages.
+rb = post("/api/rollback", {"published": "oem999999.inf"})
+print("rollback guard ->", rb, "OK" if rb[0] == 403 else "UNEXPECTED")
 print("rollback bad ->", post("/api/rollback", {"published": "../evil"}))
 print("health ->", get("/api/health"))
 print("ENDPOINTS OK")
