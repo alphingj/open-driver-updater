@@ -28,18 +28,35 @@ jobs:
         run: cs\build.bat
         shell: pwsh
 
-      - name: Run Python unit tests
+      - name: Run C# unit tests (OduTest)
+        run: cs\test.bat
+        shell: pwsh
+
+      - name: Run Python unit + end-to-end tests
         run: python -m unittest discover -s tests
 
-      - name: Run C# self-test (scanner + resolver parity)
-        run: cs\bin\OduApp.exe --selftest
+      - name: Run self-test (scan + resolver)
         shell: pwsh
+        run: |
+          $log = Join-Path $env:TEMP 'odu-selftest.txt'
+          if (Test-Path $log) { Remove-Item $log -Force }
+          $p = Start-Process -FilePath '.\cs\bin\OduApp.exe' -ArgumentList '--selftest' -Wait -PassThru
+          if (Test-Path $log) { Get-Content $log }
+          if ($p.ExitCode -ne 0) { throw "self-test exited $($p.ExitCode)" }
+          if (-not (Test-Path $log)) { throw "self-test wrote no log" }
+          if (-not ((Get-Content $log -Raw).StartsWith('OK'))) { throw "self-test log is not OK" }
 
       - name: Build installer (Inno Setup, best-effort)
-        run: |
-          if (Test-Path 'C:\Program Files\Inno Setup 7\ISCC.exe') {
-            & 'C:\Program Files\Inno Setup 7\ISCC.exe' installer\setup.iss
-          } else {
-            Write-Host 'Inno Setup 7 not installed on this runner; skipping installer build.'
-          }
         shell: pwsh
+        run: |
+          $candidates = @(
+            'C:\Program Files\Inno Setup 7\ISCC.exe',
+            'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
+            'C:\Program Files\Inno Setup 6\ISCC.exe')
+          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            Write-Host 'Inno Setup is not installed on this runner; skipping installer build.'
+            exit 0
+          }
+          & $iscc installer\setup.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
