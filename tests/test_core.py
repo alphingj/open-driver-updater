@@ -527,6 +527,22 @@ class RollbackTest(unittest.TestCase):
             self.assertEqual(errors, [])
             self.assertEqual(len(store.list_backups(db=db)), 8 * 25)
 
+    def test_corrupt_db_is_quarantined(self):
+        import tempfile
+        from odu import store
+        with tempfile.TemporaryDirectory() as d:
+            db = os.path.join(d, "bad.db")
+            with open(db, "wb") as f:
+                f.write(b"this is not a sqlite database" * 64)
+            # Fresh schema instead of an exception on every API call.
+            self.assertEqual(store.get_exclusions(path=db), [])
+            store.add_exclusion("HID\\TEST", path=db)
+            self.assertEqual(store.get_exclusions(path=db), ["HID\\TEST"])
+            self.assertTrue(any(".corrupt-" in n for n in os.listdir(d)))
+            # The damaged bytes are preserved for inspection.
+            kept = [n for n in os.listdir(d) if ".corrupt-" in n][0]
+            self.assertGreater(os.path.getsize(os.path.join(d, kept)), 0)
+
 
 class DownloadCleanupTest(unittest.TestCase):
     def test_age_and_size_caps(self):

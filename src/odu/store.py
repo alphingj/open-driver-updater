@@ -39,17 +39,57 @@ def db_path(path: str | None = None) -> str:
     return os.environ.get("ODU_DB", os.path.join(os.path.expanduser("~"), ".odu.sqlite3"))
 
 
-def connect(path: str | None = None) -> sqlite3.Connection:
-    con = sqlite3.connect(db_path(path), timeout=30)
+def _open(path: str) -> sqlite3.Connection:
+    con = sqlite3.connect(path, timeout=30)
     # WAL keeps the UI's polling readers from blocking the install job's writers.
     try:
         con.execute("PRAGMA journal_mode=WAL")
     except sqlite3.Error:
         pass
-    for stmt in _SCHEMA:
-        con.execute(stmt)
-    _migrate(con)
     return con
+
+
+def _quarantine(path: str) -> None:
+    """Keep a corrupt database for forensics instead of silently shredding it."""
+    stamp = str(int(time.time()))
+    for suffix in ("", "-wal", "-shm"):
+        src = path + suffix
+        if os.path.exists(src):
+            try:
+                os.replace(src, src + ".corrupt-" + stamp)
+            except OSError:
+                pass
+
+
+def connect(path: str | None = None) -> sqlite3.Connection:
+    p = db_path(path)
+    con = _open(p)
+    try:
+        for stmt in _SCHEMA:
+            con.execute(stmt)
+        _migrate(con)
+        return con
+    except sqlite3.OperationalError:
+        # Locked/busy is transient: never quarantine a healthy database.
+        con.close()
+        raise
+    except sqlite3.DatabaseError:
+        # "file is not a database" / malformed image. Without this every API
+        # call would 500 forever; keep the bad file aside and start clean.
+        try:
+            con.close()
+        except sqlite3.Error:
+            pass
+        _quarantine(p)
+        con = _open(p)
+        try:
+            for stmt in _SCHEMA:
+                con.execute(stmt)
+            _migrate(con)
+            return con
+        except Exception:
+            con.close()
+            raise
 
 
 def get_exclusions(path: str | None = None) -> list[str]:

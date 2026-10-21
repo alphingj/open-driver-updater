@@ -141,6 +141,15 @@ namespace OduApp
             Check(!File.Exists(oldCab) && File.Exists(newCab), "dl-cap");
             try { Directory.Delete(dl, true); } catch { }
 
+            // Crash log: readable entry, and a bogus path never throws.
+            string cl = Path.Combine(Path.GetTempPath(),
+                                     "odu-test-crash-" + Guid.NewGuid().ToString("N") + ".log");
+            CrashLog.Write(cl, new InvalidOperationException("boom"));
+            Check(File.Exists(cl) && File.ReadAllText(cl).Contains("boom"), "crash-log");
+            CrashLog.Write("", new Exception("ignored"));
+            CrashLog.Write(cl, null);
+            try { File.Delete(cl); } catch { }
+
             // NativeScan.Parse tolerance
             var devs = NativeScan.Parse("[{\"instance_id\":\"X\",\"hwid\":[\"A\"],\"problem_code\":7}]");
             Check(devs.Count == 1 && devs[0].Status == "OK" && devs[0].ProblemCode == 7, "parse-minimal");

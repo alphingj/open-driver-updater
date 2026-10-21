@@ -14,5 +14,6 @@ if not exist "%MAIN%" ( echo ERROR: missing Main & exit /b 1 )
   /out:"%OUT%\OduTest.exe" ^
   "%ROOT%OduApp\Models.cs" "%ROOT%OduApp\ArchUtil.cs" "%ROOT%OduApp\Catalog.cs" ^
   "%ROOT%OduApp\Store.cs" "%ROOT%OduApp\NativeScan.cs" "%ROOT%OduApp\Ops.cs" ^
-  "%ROOT%OduApp\Updater.cs" "%ROOT%OduTest\OduTest.cs" "%ROOT%OduTest\Main.cs" || exit /b 1
+  "%ROOT%OduApp\Updater.cs" "%ROOT%OduApp\CrashLog.cs" ^
+  "%ROOT%OduTest\OduTest.cs" "%ROOT%OduTest\Main.cs" || exit /b 1
 "%OUT%\OduTest.exe"

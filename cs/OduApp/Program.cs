@@ -7,7 +7,7 @@ namespace OduApp
 {
     public static class AppVersion
     {
-        public const string Value = "0.7.7";
+        public const string Value = "0.7.8";
     }
 
     public static class Program
@@ -40,7 +40,27 @@ namespace OduApp
                     return 0;
                 }
             }
+            AppDomain.CurrentDomain.UnhandledException +=
+                delegate(object s, UnhandledExceptionEventArgs a)
+                {
+                    CrashLog.Write(a.ExceptionObject as Exception);
+                };
             var app = new Application();
+            app.DispatcherUnhandledException +=
+                delegate(object s, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs a)
+                {
+                    CrashLog.Write(a.Exception);
+                    try
+                    {
+                        System.Windows.MessageBox.Show(
+                            "Open Driver Updater hit an unexpected error.\n\n" +
+                            "Details were saved to:\n" + CrashLog.FilePath(),
+                            "Open Driver Updater", System.Windows.MessageBoxButton.OK,
+                            System.Windows.MessageBoxImage.Error);
+                    }
+                    catch { }
+                    a.Handled = false;  // keep the normal crash behaviour
+                };
             app.Run(new MainWindow());
             return 0;
         }
