@@ -71,6 +71,72 @@ def download(url: str, dest_dir: str, timeout: int = 120,
     return dest
 
 
+def cleanup_downloads(dl_dir: str | None = None, max_age_days: int = 7,
+                      max_bytes: int = 2 * 1024 ** 3) -> dict:
+    """Bound the CAB cache: drop stale files, then oldest-first over the cap.
+
+    Failed downloads are kept for retry/debug, so the folder would otherwise
+    grow forever. Never raises: cleanup trouble must not block an install.
+    Stale ``odu-*`` expansion directories left by a killed process are also
+    removed once they are more than a day old.
+    """
+    dl_dir = dl_dir or os.path.join(tempfile.gettempdir(), "odu-dl")
+    removed = 0
+    freed = 0
+    now = time.time()
+    cutoff = now - max_age_days * 86400
+    entries: list[tuple[float, int, str]] = []
+    try:
+        for name in os.listdir(dl_dir):
+            p = os.path.join(dl_dir, name)
+            if not name.lower().endswith(".cab") or not os.path.isfile(p):
+                continue
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue
+            entries.append((st.st_mtime, st.st_size, p))
+    except OSError:
+        entries = []
+    keep: list[tuple[float, int, str]] = []
+    for mtime, size, p in entries:
+        if mtime >= cutoff:
+            keep.append((mtime, size, p))
+            continue
+        try:
+            os.remove(p)
+            removed += 1
+            freed += size
+        except OSError:
+            pass
+    total = sum(size for _, size, _ in keep)
+    for mtime, size, p in sorted(keep):
+        if total <= max_bytes:
+            break
+        try:
+            os.remove(p)
+            removed += 1
+            freed += size
+            total -= size
+        except OSError:
+            pass
+    try:
+        tmp = tempfile.gettempdir()
+        for name in os.listdir(tmp):
+            if not name.startswith("odu-") or name == "odu-dl":
+                continue
+            p = os.path.join(tmp, name)
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue
+            if os.path.isdir(p) and st.st_mtime < now - 86400:
+                shutil.rmtree(p, ignore_errors=True)
+    except OSError:
+        pass
+    return {"ok": True, "removed": removed, "freed": freed}
+
+
 def expand_cab(cab: str, dest_dir: str) -> list[str]:
     os.makedirs(dest_dir, exist_ok=True)
     try:

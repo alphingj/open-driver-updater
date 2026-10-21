@@ -9,14 +9,15 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import urllib.error
 import urllib.request
-import urllib.error
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
@@ -49,6 +50,11 @@ def _req(method, path, body=None, timeout=30):
 class WebApiTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        # Hermetic DB: the suite writes exclusions/backups, so point both the
+        # server and this process at a temp database instead of ~/.odu.sqlite3.
+        cls.tmp = tempfile.mkdtemp(prefix="odu-webapi-")
+        cls._old_db = os.environ.get("ODU_DB")
+        os.environ["ODU_DB"] = os.path.join(cls.tmp, "test.db")
         cls.proc = subprocess.Popen(
             [sys.executable, "-m", "odu.cli", "serve", "--port", str(PORT)],
             cwd=ROOT,
@@ -76,6 +82,11 @@ class WebApiTest(unittest.TestCase):
             cls.proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             cls.proc.kill()
+        if cls._old_db is None:
+            os.environ.pop("ODU_DB", None)
+        else:
+            os.environ["ODU_DB"] = cls._old_db
+        shutil.rmtree(cls.tmp, ignore_errors=True)
 
     def test_health(self):
         code, j = _req("GET", "/api/health")
@@ -177,6 +188,38 @@ class WebApiTest(unittest.TestCase):
             self.assertFalse(body["ok"])
         finally:
             conn.close()
+
+    def test_concurrent_polling_and_store_writes(self):
+        # The UI polls while a job writes; WAL + short connections must keep
+        # every request a clean 200 (no "database is locked").
+        from odu import store
+        errors = []
+
+        def reader():
+            for _ in range(6):
+                for path in ("/api/health", "/api/backups", "/api/installs",
+                             "/api/exclusions", "/api/job"):
+                    try:
+                        code, _ = _req("GET", path, timeout=20)
+                        if code != 200:
+                            errors.append((path, code))
+                    except Exception as e:
+                        errors.append((path, str(e)))
+
+        def writer():
+            try:
+                for i in range(30):
+                    store.record_backup("ID%d" % i, "concurrency", "C:\\tmp")
+            except Exception as e:
+                errors.append(("write", str(e)))
+
+        threads = [threading.Thread(target=reader) for _ in range(6)]
+        threads += [threading.Thread(target=writer) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errors, [])
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 // tests/test_core.py — all three must agree (conformance).
 using System;
 using System.Collections.Generic;
+using System.IO;
 
 namespace OduApp
 {
@@ -118,6 +119,27 @@ namespace OduApp
             Check(Ops.RestorePointUnavailable(
                   "FAIL: System Restore is disabled on the system drive"), "rp-disabled");
             Check(!Ops.RestorePointUnavailable("restore point created"), "rp-enabled");
+
+            // Download cache: stale CABs dropped, fresh kept, non-cab untouched.
+            string dl = Path.Combine(Path.GetTempPath(),
+                                     "odu-test-dl-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dl);
+            string oldCab = Path.Combine(dl, "old.cab");
+            string newCab = Path.Combine(dl, "new.cab");
+            string note = Path.Combine(dl, "note.txt");
+            File.WriteAllText(oldCab, "xxxxxxxxxx");
+            File.WriteAllText(newCab, "y");
+            File.WriteAllText(note, "z");
+            File.SetLastWriteTimeUtc(oldCab, DateTime.UtcNow.AddDays(-30));
+            Ops.CleanupDownloads(dl, 7, 2L * 1024 * 1024 * 1024);
+            Check(!File.Exists(oldCab) && File.Exists(newCab) && File.Exists(note),
+                  "dl-age");
+            // 11 bytes of CABs against a 5-byte cap -> oldest CAB goes.
+            File.WriteAllText(oldCab, "xxxxxxxxxx");
+            File.SetLastWriteTimeUtc(oldCab, DateTime.UtcNow.AddDays(-1));
+            Ops.CleanupDownloads(dl, 7, 5);
+            Check(!File.Exists(oldCab) && File.Exists(newCab), "dl-cap");
+            try { Directory.Delete(dl, true); } catch { }
 
             // NativeScan.Parse tolerance
             var devs = NativeScan.Parse("[{\"instance_id\":\"X\",\"hwid\":[\"A\"],\"problem_code\":7}]");

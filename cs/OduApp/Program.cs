@@ -7,7 +7,7 @@ namespace OduApp
 {
     public static class AppVersion
     {
-        public const string Value = "0.7.6";
+        public const string Value = "0.7.7";
     }
 
     public static class Program

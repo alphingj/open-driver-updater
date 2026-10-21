@@ -24,7 +24,7 @@ Driver matching always uses the **OS** architecture (WOW64-safe), INF tags
 ## Install (recommended)
 
 ```powershell
-installer\Output\OpenDriverUpdater-Setup-0.7.6.exe
+installer\Output\OpenDriverUpdater-Setup-0.7.7.exe
 ```
 
 Per-user install, no admin needed to install: Start Menu shortcut, Add/Remove

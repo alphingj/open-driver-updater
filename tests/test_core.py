@@ -502,6 +502,69 @@ class RollbackTest(unittest.TestCase):
                 con.close()
             self.assertEqual(str(mode).lower(), "wal")
 
+    def test_concurrent_store_writes(self):
+        import tempfile
+        import threading
+        from odu import store
+        with tempfile.TemporaryDirectory() as d:
+            db = os.path.join(d, "c.db")
+            errors = []
+
+            def work(n):
+                try:
+                    for i in range(25):
+                        store.record_backup("ID%d" % n, "t", "p", db=db)
+                        store.add_exclusion("HW%d-%d" % (n, i), path=db)
+                        store.get_exclusions(path=db)
+                except Exception as e:  # noqa: BLE001 - report to the main thread
+                    errors.append(e)
+
+            threads = [threading.Thread(target=work, args=(n,)) for n in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            self.assertEqual(errors, [])
+            self.assertEqual(len(store.list_backups(db=db)), 8 * 25)
+
+
+class DownloadCleanupTest(unittest.TestCase):
+    def test_age_and_size_caps(self):
+        import tempfile
+        import time
+        from odu.installer import cleanup_downloads
+        with tempfile.TemporaryDirectory() as d:
+            dl = os.path.join(d, "odu-dl")
+            os.makedirs(dl)
+
+            def make(name, size, age_days):
+                p = os.path.join(dl, name)
+                with open(p, "wb") as f:
+                    f.write(b"x" * size)
+                t = time.time() - age_days * 86400
+                os.utime(p, (t, t))
+                return p
+
+            old = make("old.cab", 10, 30)
+            mid = make("mid.cab", 10, 2)
+            new = make("new.cab", 10, 0)
+            keep = os.path.join(dl, "notes.txt")
+            open(keep, "w").close()
+
+            r = cleanup_downloads(dl, max_age_days=7, max_bytes=1000)
+            self.assertTrue(r["ok"])
+            self.assertFalse(os.path.exists(old))
+            self.assertTrue(os.path.exists(mid))
+            self.assertTrue(os.path.exists(new))
+            self.assertTrue(os.path.exists(keep))
+            self.assertEqual(r["removed"], 1)
+
+            # Both remaining CABs are 10 bytes; a 10-byte cap drops the oldest.
+            r = cleanup_downloads(dl, max_age_days=7, max_bytes=10)
+            self.assertFalse(os.path.exists(mid))
+            self.assertTrue(os.path.exists(new))
+            self.assertTrue(os.path.exists(keep))
+
     def test_rollback_restores_previous(self):
         import tempfile
         from odu import installer

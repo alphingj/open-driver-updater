@@ -47,6 +47,7 @@ namespace OduApp
             }
             string dl = Path.Combine(Path.GetTempPath(), "odu-dl");
             try { Directory.CreateDirectory(dl); } catch { }
+            Ops.CleanupDownloads(dl, 7, 2L * 1024 * 1024 * 1024);
             foreach (DriverUpdate u in items)
             {
                 if (_cancel)

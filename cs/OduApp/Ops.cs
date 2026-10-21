@@ -277,6 +277,54 @@ namespace OduApp
             return r;
         }
 
+        public static OpResult CleanupDownloads(string dlDir, int maxAgeDays, long maxBytes)
+        {
+            // Failed CABs are kept for retry/debug, so bound the folder instead
+            // of letting it grow forever. Never throws.
+            var r = new OpResult();
+            r.Ok = true;
+            r.Log = "";
+            r.Path = dlDir;
+            try
+            {
+                Directory.CreateDirectory(dlDir);
+                DateTime cutoff = DateTime.UtcNow.AddDays(-maxAgeDays);
+                var keep = new List<FileInfo>();
+                foreach (string f in Directory.GetFiles(dlDir, "*.cab"))
+                {
+                    var fi = new FileInfo(f);
+                    if (fi.LastWriteTimeUtc < cutoff)
+                    {
+                        try { fi.Delete(); } catch { }
+                    }
+                    else keep.Add(fi);
+                }
+                long total = 0;
+                foreach (FileInfo fi in keep) total += fi.Length;
+                keep.Sort(delegate(FileInfo a, FileInfo b)
+                {
+                    return a.LastWriteTimeUtc.CompareTo(b.LastWriteTimeUtc);
+                });
+                foreach (FileInfo fi in keep)
+                {
+                    if (total <= maxBytes) break;
+                    try
+                    {
+                        long n = fi.Length;
+                        fi.Delete();
+                        total -= n;
+                    }
+                    catch { }
+                }
+            }
+            catch (Exception e)
+            {
+                r.Ok = false;
+                r.Log = e.Message;
+            }
+            return r;
+        }
+
         public static OpResult RestorePoint()
         {
             // powershell.exe exits 0 even when Checkpoint writes FAIL, so the

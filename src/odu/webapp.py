@@ -112,6 +112,10 @@ def _job_run(items: list[dict]) -> None:
                 JOB["done"] = JOB["total"]
             return
         dl_dir = os.path.join(tempfile.gettempdir(), "odu-dl")
+        try:
+            installer_mod.cleanup_downloads(dl_dir)
+        except Exception:
+            pass
         arch = arch_mod.native_arch()
         for it in items:
             name = it.get("device_name", "?")
@@ -149,6 +153,12 @@ def _job_run(items: list[dict]) -> None:
                         with _JOB_LOCK:
                             JOB["current"] = f"Installing {name}…"
                         inst = installer_mod.install_cab(cab, arch)
+                        if inst.get("ok"):
+                            # C# does the same: keep only failed CABs for retry.
+                            try:
+                                os.remove(cab)
+                            except OSError:
+                                pass
                         ok_all = ok_all and bool(inst.get("ok"))
                         if inst.get("published"):
                             published.append(inst["published"])
@@ -163,6 +173,7 @@ def _job_run(items: list[dict]) -> None:
                             store_mod.record_install(
                                 oem, it.get("instance_id", ""), name,
                                 prev_oem=prev.get("oem", ""),
+                                prev_version=str(it.get("installed_version", "")),
                                 prev_path=prev.get("path", ""))
             except Exception as e:  # keep going through the queue
                 res["detail"] = str(e)[-300:]
@@ -222,56 +233,69 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         try:
-            parsed = urllib.parse.urlparse(self.path)
-            if parsed.path == "/api/health":
-                from odu import arch
-                from odu import __version__
-                return self._json({"ok": True, "arch": arch.native_arch(),
-                                   "version": __version__,
-                                   "ui": os.path.isfile(os.path.join(UI_DIR, "index.html"))})
-            if parsed.path == "/api/scan":
-                live = "live=1" in (parsed.query or "")
-                return self._json(self._scan_body(live))
-            if parsed.path == "/api/backups":
-                from odu import store
-                return self._json({"backups": store.list_backups()})
-            if parsed.path == "/api/installs":
-                from odu import store
-                return self._json({"installs": store.list_installs()})
-            if parsed.path == "/api/exclusions":
-                from odu import store
-                return self._json({"exclusions": store.get_exclusions()})
-            if parsed.path == "/api/schedule":
-                from odu import scheduler
-                return self._json(scheduler.status())
-            if parsed.path == "/api/job":
-                return self._json(job_snapshot())
-            if parsed.path == "/api/system":
-                from odu import safety as safety_mod
-                return self._json({"reboot": safety_mod.reboot_pending()})
-            if parsed.path == "/api/app-update":
-                return self._json(_app_update())
-            if parsed.path == "/api/components":
-                from odu import components
-                return self._json({"components": components.check()})
-            if parsed.path == "/api/wu":
-                from odu import wu
-                return self._json({"updates": wu.search()})
-            if parsed.path == "/api/drivers":
-                from odu import drivers as drivers_mod
-                return self._json({"drivers": drivers_mod.enum_drivers()})
-            if parsed.path == "/api/procs":
-                from odu import gameboost
-                return self._json({"procs": gameboost.top_processes()})
-            return super().do_GET()
+            return self._do_get()
         except (BrokenPipeError, ConnectionResetError):
             pass
+        except Exception as e:  # noqa: BLE001 - never drop the UI connection
+            try:
+                self._json({"ok": False, "error": str(e)[:300]}, 500)
+            except Exception:
+                pass
+
+    def _do_get(self):
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/api/health":
+            from odu import arch
+            from odu import __version__
+            return self._json({"ok": True, "arch": arch.native_arch(),
+                               "version": __version__,
+                               "ui": os.path.isfile(os.path.join(UI_DIR, "index.html"))})
+        if parsed.path == "/api/scan":
+            live = "live=1" in (parsed.query or "")
+            return self._json(self._scan_body(live))
+        if parsed.path == "/api/backups":
+            from odu import store
+            return self._json({"backups": store.list_backups()})
+        if parsed.path == "/api/installs":
+            from odu import store
+            return self._json({"installs": store.list_installs()})
+        if parsed.path == "/api/exclusions":
+            from odu import store
+            return self._json({"exclusions": store.get_exclusions()})
+        if parsed.path == "/api/schedule":
+            from odu import scheduler
+            return self._json(scheduler.status())
+        if parsed.path == "/api/job":
+            return self._json(job_snapshot())
+        if parsed.path == "/api/system":
+            from odu import safety as safety_mod
+            return self._json({"reboot": safety_mod.reboot_pending()})
+        if parsed.path == "/api/app-update":
+            return self._json(_app_update())
+        if parsed.path == "/api/components":
+            from odu import components
+            return self._json({"components": components.check()})
+        if parsed.path == "/api/wu":
+            from odu import wu
+            return self._json({"updates": wu.search()})
+        if parsed.path == "/api/drivers":
+            from odu import drivers as drivers_mod
+            return self._json({"drivers": drivers_mod.enum_drivers()})
+        if parsed.path == "/api/procs":
+            from odu import gameboost
+            return self._json({"procs": gameboost.top_processes()})
+        return super().do_GET()
 
     def do_POST(self):
         try:
             return self._do_post()
         except (BrokenPipeError, ConnectionResetError):
             pass
+        except Exception as e:  # noqa: BLE001 - return JSON, not a dropped socket
+            try:
+                self._json({"ok": False, "error": str(e)[:300]}, 500)
+            except Exception:
+                pass
 
     def _do_post(self):
         parsed = urllib.parse.urlparse(self.path)
