@@ -120,11 +120,20 @@ def remove_exclusion(hwid: str, path: str | None = None) -> None:
         con.close()
 
 
+#: Keep the manifest bounded; the exported files are the real history. Without
+#: this, `/api/backups` grows by one row per driver on every update, forever.
+MAX_BACKUP_ROWS = 2000
+
+
 def record_backup(instance_id: str, name: str, path_: str, db: str | None = None) -> int:
     con = connect(db)
     try:
         cur = con.execute("INSERT INTO backups(created,instance_id,name,path) VALUES(?,?,?,?)",
                           (time.time(), instance_id, name, path_))
+        cut = con.execute("SELECT id FROM backups ORDER BY id DESC LIMIT 1 OFFSET ?",
+                          (MAX_BACKUP_ROWS,)).fetchone()
+        if cut:
+            con.execute("DELETE FROM backups WHERE id <= ?", (cut[0],))
         con.commit()
         return int(cur.lastrowid)
     finally:

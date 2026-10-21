@@ -543,6 +543,22 @@ class RollbackTest(unittest.TestCase):
             kept = [n for n in os.listdir(d) if ".corrupt-" in n][0]
             self.assertGreater(os.path.getsize(os.path.join(d, kept)), 0)
 
+    def test_backup_manifest_is_bounded(self):
+        import tempfile
+        from odu import store
+        with tempfile.TemporaryDirectory() as d:
+            db = os.path.join(d, "b.db")
+            old = store.MAX_BACKUP_ROWS
+            store.MAX_BACKUP_ROWS = 5
+            try:
+                for i in range(8):
+                    store.record_backup("ID%d" % i, "t", "p", db=db)
+            finally:
+                store.MAX_BACKUP_ROWS = old
+            rows = store.list_backups(db=db)
+            self.assertEqual([r["instance_id"] for r in rows],
+                             ["ID7", "ID6", "ID5", "ID4", "ID3"])
+
 
 class DownloadCleanupTest(unittest.TestCase):
     def test_age_and_size_caps(self):

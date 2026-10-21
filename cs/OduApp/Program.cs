@@ -7,7 +7,7 @@ namespace OduApp
 {
     public static class AppVersion
     {
-        public const string Value = "0.7.8";
+        public const string Value = "0.7.9";
     }
 
     public static class Program
@@ -39,6 +39,18 @@ namespace OduApp
                     catch { }
                     return 0;
                 }
+            }
+            if (!SingleInstance.Acquire("OpenDriverUpdater"))
+            {
+                try
+                {
+                    System.Windows.MessageBox.Show(
+                        "Open Driver Updater is already running.",
+                        "Open Driver Updater", System.Windows.MessageBoxButton.OK,
+                        System.Windows.MessageBoxImage.Information);
+                }
+                catch { }
+                return 0;
             }
             AppDomain.CurrentDomain.UnhandledException +=
                 delegate(object s, UnhandledExceptionEventArgs a)

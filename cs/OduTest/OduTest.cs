@@ -150,6 +150,15 @@ namespace OduApp
             CrashLog.Write(cl, null);
             try { File.Delete(cl); } catch { }
 
+            // Single instance: the second acquire fails, and Release allows a
+            // later acquire (fresh name so a running GUI cannot interfere).
+            string mutexName = "odu-test-" + Guid.NewGuid().ToString("N");
+            Check(SingleInstance.Acquire(mutexName), "single-first");
+            Check(!SingleInstance.Acquire(mutexName), "single-second");
+            SingleInstance.Release();
+            Check(SingleInstance.Acquire(mutexName), "single-reacquire");
+            SingleInstance.Release();
+
             // NativeScan.Parse tolerance
             var devs = NativeScan.Parse("[{\"instance_id\":\"X\",\"hwid\":[\"A\"],\"problem_code\":7}]");
             Check(devs.Count == 1 && devs[0].Status == "OK" && devs[0].ProblemCode == 7, "parse-minimal");
